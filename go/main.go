@@ -23,6 +23,11 @@ func New(
 	}
 }
 
+// +check
+func (m *Biomego) DummyCheck() error {
+	return nil
+}
+
 // Returns a container that echoes whatever string argument is provided
 func (m *Biomego) ContainerEcho(stringArg string) *dagger.Container {
 	return dag.Container().From("alpine:latest").WithExec([]string{"echo", stringArg})
