@@ -1,0 +1,10 @@
+{
+  "files": {
+    "includes": ["**", "!__dagger.entrypoint.ts", "!sdk"]
+  },
+  "json": {
+    "formatter": {
+      "indentStyle": "space"
+    }
+  }
+}
