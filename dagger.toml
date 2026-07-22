@@ -11,3 +11,6 @@ source = "github.com/dagger/typescript-sdk"
 
 [modules.dagger-typescript-sdk.as-sdk]
 name = "typescript"
+
+[[modules.dagger-typescript-sdk.as-sdk.modules]]
+path = "."
