@@ -70,17 +70,20 @@ export class Biomejs {
 		files: string[] = [],
 		fixFilter: string[] = ["**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx"],
 	): Promise<Changeset> {
+		const path = await this.path();
 		const fixed = (await this.base())
-			.withWorkdir(`/src/${await this.path()}`)
+			.withWorkdir(`/src/${path}`)
 			.withExec(["npx", "@biomejs/biome", "check", "--write", ...files])
-			.directory("/src")
+			.directory(`/src/${path}`)
 			.withoutDirectory("node_modules");
 
 		return dag
 			.directory()
 			.withDirectory(".", fixed, { include: fixFilter })
 			.changes(
-				dag.directory().withDirectory(".", this.source, { include: fixFilter }),
+				dag.directory().withDirectory(".", this.source.directory(path), {
+					include: fixFilter,
+				}),
 			);
 	}
 
