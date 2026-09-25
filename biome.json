@@ -1,6 +1,6 @@
 {
   "files": {
-    "includes": ["**", "!__dagger.entrypoint.ts", "!sdk"]
+    "includes": ["**", "!__dagger.entrypoint.ts", "!sdk", "!clients"]
   },
   "json": {
     "formatter": {
