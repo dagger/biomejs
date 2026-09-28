@@ -181,9 +181,7 @@ export class Client extends BaseClient {
 
 
 async function __serveModule(): Promise<void> {
-  await (__dag as any).getGQLClient().request(
-    `{ currentWorkspace { moduleSource(path: "/.") { asModule { serve } } } }`,
-  )
+  await __dag.serveModule("/.")
 }
 
 export const dag = new Client(
