@@ -54,9 +54,16 @@ declare function getTracer(name?: string): Tracer;
 declare class Connection {
     private _gqlClient?;
     constructor(_gqlClient?: GraphQLClient | undefined);
+    private _served;
     resetClient(): void;
     setGQLClient(gqlClient: GraphQLClient): void;
     getGQLClient(): GraphQLClient;
+    /**
+     * Run `serve` the first time `key` is seen in this session and remember the
+     * result, so a generated client can ensure its module is served before its
+     * first query without serving it again on every call.
+     */
+    ensureServed(key: string, serve: () => Promise<void>): Promise<void>;
 }
 
 type QueryTree = {
@@ -65,10 +72,21 @@ type QueryTree = {
     inlineType?: string;
 };
 
+/**
+ * A module a generated client serves into the session before its first query.
+ * `key` memoizes the serve per session (the module's ref or path); `run`
+ * performs it, through a context that carries no serve of its own so it cannot
+ * recurse.
+ */
+type ServeSpec = {
+    key: string;
+    run: () => Promise<void>;
+};
 declare class Context {
     private _queryTree;
     private _connection;
-    constructor(_queryTree?: QueryTree[], _connection?: Connection);
+    private _serve?;
+    constructor(_queryTree?: QueryTree[], _connection?: Connection, _serve?: ServeSpec | undefined);
     getGQLClient(): GraphQLClient;
     copy(): Context;
     select(operation: string, args?: Record<string, unknown>): Context;
@@ -77,6 +95,12 @@ declare class Context {
      * Produces: node(id: "...") { ... on TypeName { children } }
      */
     selectNode(id: string, typeName: string): Context;
+    /**
+     * Return a copy of this context that serves `spec`'s module before the first
+     * query on it (or on any context derived from it) runs. Used by a generated
+     * module client to bind its own module to its `dag`.
+     */
+    withServe(spec: ServeSpec): Context;
     execute<T>(): Promise<T>;
 }
 /**
@@ -115,11 +139,192 @@ type AddressFileOpts = {
     gitignore?: boolean;
     noCache?: boolean;
 };
-type AgentGroupComposeOpts = {
+type AgentNotifyOpts = {
     /**
-     * The base LLM to compose onto. Defaults to a fresh workspace-bound LLM.
+     * The lifecycle states that fire an event. IDLE events carry the turn's final reply; FAILED events carry the loop error.
      */
-    base?: LLM;
+    on?: AgentState[];
+};
+type AgentPauseOpts = {
+    /**
+     * Preempt the in-flight step instead of letting it finish. All completed steps are kept and the interrupted turn stays open: messages it consumed remain pending, while unconsumed mailbox messages are discarded. Resume continues the turn from the last committed step. On an idle, never-started, or failed agent there is nothing to preempt, so this is a plain pause.
+     */
+    interrupt?: boolean;
+};
+type AgentSendOpts = {
+    /**
+     * The ref of a message in the SENDER's own mailbox this send answers (e.g. "#3", from its attribution header). The recipient sees the two paired, and awaiters of the replied-to message resolve with this reply immediately instead of at the sender's turn end.
+     */
+    replyTo?: string;
+    /**
+     * Ordered TEXT, IMAGE, AUDIO, or DOCUMENT user content blocks. File inputs are resolved and all content is validated before enqueueing. Pass an empty message for media-only sends.
+     */
+    content?: LLMContentBlockInput[];
+};
+type AgentStopOpts = {
+    /**
+     * Cancel the loop immediately instead of letting an in-flight step finish. Either way the completed steps are preserved in the snapshot.
+     */
+    kill?: boolean;
+};
+/**
+ * EXPERIMENTAL: Agent APIs are likely to change.
+ *
+ * How a message landed in an agent's evaluation.
+ */
+declare enum AgentMessageDelivery {
+    /**
+     * The message is queued: the agent is paused or failed, and a resume will drain it.
+     */
+    Queued = "QUEUED",
+    /**
+     * The message opened a new turn: the agent was idle or newly started.
+     */
+    Started = "STARTED",
+    /**
+     * The message was absorbed into the in-flight turn at a step boundary, steering it.
+     */
+    Steered = "STEERED"
+}
+/**
+ * Utility function to convert a AgentMessageDelivery value to its name so
+ * it can be uses as argument to call a exposed function.
+ */
+declare function AgentMessageDeliveryValueToName(value: AgentMessageDelivery): string;
+/**
+ * Utility function to convert a AgentMessageDelivery name to its value so
+ * it can be properly used inside the module runtime.
+ */
+declare function AgentMessageDeliveryNameToValue(name: string): AgentMessageDelivery;
+/**
+ * EXPERIMENTAL: Agent APIs are likely to change.
+ *
+ * Computed lifecycle state of an agent.
+ */
+declare enum AgentState {
+    /**
+     * The loop failed; snapshot holds the completed prefix. Resume retries.
+     */
+    Failed = "FAILED",
+    /**
+     * Mailbox empty, turn complete; blocked in receive.
+     */
+    Idle = "IDLE",
+    /**
+     * Mailbox accepting but not draining, until resume.
+     */
+    Paused = "PAUSED",
+    /**
+     * A model request or tool evaluation is in flight.
+     */
+    Running = "RUNNING",
+    /**
+     * Runtime released; snapshot remains readable.
+     */
+    Stopped = "STOPPED",
+    /**
+     * Blocked on input from the user (derived; see waitingOn).
+     */
+    WaitingInput = "WAITING_INPUT"
+}
+/**
+ * Utility function to convert a AgentState value to its name so
+ * it can be uses as argument to call a exposed function.
+ */
+declare function AgentStateValueToName(value: AgentState): string;
+/**
+ * Utility function to convert a AgentState name to its value so
+ * it can be properly used inside the module runtime.
+ */
+declare function AgentStateNameToValue(name: string): AgentState;
+type ArtifactUriOpts = {
+    /**
+     * Prefix the workspace's Git address and commit: dag://<workspace>@<commit>:<path>. Fails if the workspace has no Git address.
+     */
+    absolute?: boolean;
+    /**
+     * Include the dimension keys as a query. Without them, the address is a path selector.
+     */
+    dimensionKeys?: boolean;
+    /**
+     * Include the artifact type in the scheme: dag+container://.
+     */
+    typeAssertion?: boolean;
+};
+type ArtifactValueOpts = {
+    /**
+     * Field arguments as a JSON object.
+     */
+    arguments: JSON;
+};
+declare enum ArtifactDimensionKind {
+    Collection = "COLLECTION",
+    Module = "MODULE",
+    Type = "TYPE"
+}
+/**
+ * Utility function to convert a ArtifactDimensionKind value to its name so
+ * it can be uses as argument to call a exposed function.
+ */
+declare function ArtifactDimensionKindValueToName(value: ArtifactDimensionKind): string;
+/**
+ * Utility function to convert a ArtifactDimensionKind name to its value so
+ * it can be properly used inside the module runtime.
+ */
+declare function ArtifactDimensionKindNameToValue(name: string): ArtifactDimensionKind;
+type ArtifactsFilterCheckCommandOpts = {
+    /**
+     * Include generated-file checks. Defaults to the workspace check-generated setting, or true when unset.
+     */
+    generated?: boolean;
+};
+type ArtifactsFilterDirectivesOpts = {
+    /**
+     * Remove the matching artifacts instead.
+     */
+    exclude?: boolean;
+};
+type ArtifactsFilterParentDirectivesOpts = {
+    /**
+     * Remove the matching artifacts instead.
+     */
+    exclude?: boolean;
+};
+type ArtifactsFilterParentTypesOpts = {
+    /**
+     * Remove the matching artifacts instead.
+     */
+    exclude?: boolean;
+};
+type ArtifactsFilterTypesOpts = {
+    /**
+     * Remove the matching artifacts instead.
+     */
+    exclude?: boolean;
+};
+type ArtifactsPathDefinitionsOpts = {
+    /**
+     * Prefix each address with the workspace's Git address and commit.
+     */
+    absolute?: boolean;
+    /**
+     * Include the artifact type in each address scheme.
+     */
+    typeAssertion?: boolean;
+    /**
+     * Project paths to the items of this collection dimension. Preserve parent dimensions and remove descendant dimensions.
+     */
+    dimension?: string;
+};
+type ArtifactsValuesOpts = {
+    /**
+     * Cancel remaining work after the first failure.
+     */
+    failFast?: boolean;
+    /**
+     * Field arguments applied to each artifact, as a JSON object.
+     */
+    arguments?: JSON;
 };
 type BuildArg = {
     /**
@@ -164,6 +369,16 @@ declare function CacheSharingModeValueToName(value: CacheSharingMode): string;
  * it can be properly used inside the module runtime.
  */
 declare function CacheSharingModeNameToValue(name: string): CacheSharingMode;
+type ChangesetFilterOpts = {
+    /**
+     * Only include changes at paths matching these patterns. Empty includes all paths.
+     */
+    include?: string[];
+    /**
+     * Exclude changes at paths matching these patterns.
+     */
+    exclude?: string[];
+};
 type ChangesetWithChangesetOpts = {
     /**
      * What to do on a merge conflict
@@ -234,12 +449,6 @@ declare function ChangesetsMergeConflictValueToName(value: ChangesetsMergeConfli
  * it can be properly used inside the module runtime.
  */
 declare function ChangesetsMergeConflictNameToValue(name: string): ChangesetsMergeConflict;
-type CheckGroupRunOpts = {
-    /**
-     * If true, stop running checks as soon as any check fails.
-     */
-    failFast?: boolean;
-};
 type ContainerAsServiceOpts = {
     /**
      * Command to run instead of the container's default command (e.g., ["go", "run", "main.go"]).
@@ -252,7 +461,11 @@ type ContainerAsServiceOpts = {
      */
     useEntrypoint?: boolean;
     /**
-     * Provides Dagger access to the executed command.
+     * Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
+     */
+    disableDaggerInDagger?: boolean;
+    /**
+     * @deprecated Commands can access Dagger by default. Use "disableDaggerInDagger" to opt out.
      */
     experimentalPrivilegedNesting?: boolean;
     /**
@@ -448,6 +661,12 @@ type ContainerPublishOpts = {
      */
     insecureSkipTLSVerify?: boolean;
 };
+type ContainerShellOpts = {
+    /**
+     * Return the batch command instead of the interactive command.
+     */
+    batch?: boolean;
+};
 type ContainerStatOpts = {
     /**
      * If specified, do not follow symlinks.
@@ -460,7 +679,11 @@ type ContainerTerminalOpts = {
      */
     cmd?: string[];
     /**
-     * Provides Dagger access to the executed command.
+     * Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
+     */
+    disableDaggerInDagger?: boolean;
+    /**
+     * @deprecated Commands can access Dagger by default. Use "disableDaggerInDagger" to opt out.
      */
     experimentalPrivilegedNesting?: boolean;
     /**
@@ -490,7 +713,11 @@ type ContainerUpOpts = {
      */
     useEntrypoint?: boolean;
     /**
-     * Provides Dagger access to the executed command.
+     * Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
+     */
+    disableDaggerInDagger?: boolean;
+    /**
+     * @deprecated Commands can access Dagger by default. Use "disableDaggerInDagger" to opt out.
      */
     experimentalPrivilegedNesting?: boolean;
     /**
@@ -510,7 +737,11 @@ type ContainerUpOpts = {
 };
 type ContainerWithDefaultTerminalCmdOpts = {
     /**
-     * Provides Dagger access to the executed command.
+     * Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
+     */
+    disableDaggerInDagger?: boolean;
+    /**
+     * @deprecated Commands can access Dagger by default. Use "disableDaggerInDagger" to opt out.
      */
     experimentalPrivilegedNesting?: boolean;
     /**
@@ -613,7 +844,11 @@ type ContainerWithExecOpts = {
      */
     expect?: ReturnType;
     /**
-     * Provides Dagger access to the executed command.
+     * Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
+     */
+    disableDaggerInDagger?: boolean;
+    /**
+     * @deprecated Commands can access Dagger by default. Use "disableDaggerInDagger" to opt out.
      */
     experimentalPrivilegedNesting?: boolean;
     /**
@@ -825,6 +1060,42 @@ type ContainerWithNewFileOpts = {
      */
     expand?: boolean;
 };
+type ContainerWithRunOpts = {
+    /**
+     * Override the batch shell arguments. Example: ["bash", "-c"].
+     */
+    shell?: string[];
+    /**
+     * Override whether the shell is denied Dagger API access. Omit to use the configured shell setting.
+     */
+    disableDaggerInDagger?: boolean;
+    /**
+     * @deprecated Commands can access Dagger by default. Use "disableDaggerInDagger" to opt out.
+     */
+    experimentalPrivilegedNesting?: boolean;
+    /**
+     * Override whether the shell has all root capabilities.
+     */
+    insecureRootCapabilities?: boolean;
+};
+type ContainerWithShellOpts = {
+    /**
+     * Command arguments for batch use. The script is appended as one argument. Defaults to interactive followed by "-c".
+     */
+    batch?: string[];
+    /**
+     * Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
+     */
+    disableDaggerInDagger?: boolean;
+    /**
+     * @deprecated Commands can access Dagger by default. Use "disableDaggerInDagger" to opt out.
+     */
+    experimentalPrivilegedNesting?: boolean;
+    /**
+     * Give the shell all root capabilities. Use only with trusted commands.
+     */
+    insecureRootCapabilities?: boolean;
+};
 type ContainerWithSymlinkOpts = {
     /**
      * Replace "${VAR}" or "$VAR" in the value of path according to the current environment variables defined in the container (e.g. "/$VAR/foo.txt").
@@ -896,12 +1167,6 @@ type ContainerWithoutUnixSocketOpts = {
      * Replace "${VAR}" or "$VAR" in the value of path according to the current environment variables defined in the container (e.g. "/$VAR/foo").
      */
     expand?: boolean;
-};
-type CurrentModuleGeneratorsOpts = {
-    /**
-     * Only include generators matching the specified patterns
-     */
-    include?: string[];
 };
 type CurrentModuleWorkdirOpts = {
     /**
@@ -1106,7 +1371,11 @@ type DirectoryTerminalOpts = {
      */
     cmd?: string[];
     /**
-     * Provides Dagger access to the executed command.
+     * Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
+     */
+    disableDaggerInDagger?: boolean;
+    /**
+     * @deprecated Commands can access Dagger by default. Use "disableDaggerInDagger" to opt out.
      */
     experimentalPrivilegedNesting?: boolean;
     /**
@@ -1432,23 +1701,17 @@ declare function FunctionCachePolicyValueToName(value: FunctionCachePolicy): str
  * it can be properly used inside the module runtime.
  */
 declare function FunctionCachePolicyNameToValue(name: string): FunctionCachePolicy;
-type GeneratorGroupChangesOpts = {
-    /**
-     * Strategy to apply on conflicts between generators
-     */
-    onConflict?: ChangesetsMergeConflict;
-};
-type GeneratorGroupWorkspaceOpts = {
-    /**
-     * Strategy to apply on conflicts between generators
-     */
-    onConflict?: ChangesetsMergeConflict;
-};
 type GitCommitAncestorReleaseTagOpts = {
     /**
      * Include pre-release tags when choosing the latest tag.
      */
     includePreRelease?: boolean;
+};
+type GitCommitChangesOpts = {
+    /**
+     * Use this commit as the comparison base instead of the first parent. The comparison commit may belong to an unrelated history or repository.
+     */
+    against?: GitCommit;
 };
 type GitCommitReleaseTagOpts = {
     /**
@@ -1470,6 +1733,37 @@ type GitCommitTreeOpts = {
      */
     includeTags?: boolean;
 };
+/**
+ * How a Git push updated the remote ref.
+ */
+declare enum GitPushDisposition {
+    /**
+     * The remote ref was created.
+     */
+    Created = "CREATED",
+    /**
+     * The remote ref was fast-forwarded.
+     */
+    FastForward = "FAST_FORWARD",
+    /**
+     * The remote ref was replaced under an explicit lease.
+     */
+    Forced = "FORCED",
+    /**
+     * The remote ref already pointed to this commit.
+     */
+    UpToDate = "UP_TO_DATE"
+}
+/**
+ * Utility function to convert a GitPushDisposition value to its name so
+ * it can be uses as argument to call a exposed function.
+ */
+declare function GitPushDispositionValueToName(value: GitPushDisposition): string;
+/**
+ * Utility function to convert a GitPushDisposition name to its value so
+ * it can be properly used inside the module runtime.
+ */
+declare function GitPushDispositionNameToValue(name: string): GitPushDisposition;
 type GitRefAsWorkspaceOpts = {
     /**
      * Current working directory inside the workspace root. Defaults to the workspace root.
@@ -1490,6 +1784,24 @@ type GitRefLogOpts = {
      */
     base?: GitRef;
 };
+type GitRefPushOpts = {
+    /**
+     * Destination remote repository. Defaults to the origin remote's push routing, or the source's repository URL when none is registered. Required when the source has no remote URL.
+     */
+    to?: GitRepository;
+    /**
+     * Name of a registered remote to push to (see GitRepository.withRemote). Defaults to origin. The remote's push URLs, or its URL, become the destination; more than one push URL requires an explicit to instead.
+     */
+    remote?: string;
+    /**
+     * Destination branch; a refs/ prefix is used verbatim. Defaults to this ref's branch name. Required for detached and non-branch refs.
+     */
+    branch?: string;
+    /**
+     * Optional lease: a full lowercase object ID allows replacement only if the remote ref still has that value. Checked even for up-to-date pushes. Empty or omitted uses normal non-force rules, creating the ref if it does not exist.
+     */
+    expectedRemoteSHA?: string;
+};
 type GitRefTreeOpts = {
     /**
      * Set to true to discard .git directory.
@@ -1503,6 +1815,28 @@ type GitRefTreeOpts = {
      * Set to true to populate tag refs in the local checkout .git.
      */
     includeTags?: boolean;
+};
+type GitRefWithCommitOpts = {
+    /**
+     * Committer name. Defaults to authorName.
+     */
+    committerName?: string;
+    /**
+     * Committer email. Defaults to authorEmail.
+     */
+    committerEmail?: string;
+    /**
+     * RFC3339 committer date. Defaults to date.
+     */
+    committerDate?: string;
+    /**
+     * Allow a commit whose tree matches its parent, including when the supplied edits are already present. Defaults to false.
+     */
+    allowEmpty?: boolean;
+    /**
+     * Add a Signed-off-by trailer using the commit author's name and email.
+     */
+    signoff?: boolean;
 };
 type GitRepositoryAsWorkspaceOpts = {
     /**
@@ -1539,6 +1873,12 @@ type GitRepositoryWithBundleOpts = {
      * An optional remote ref hint for fetching a prerequisite when the remote does not allow fetches by object ID.
      */
     prerequisiteRef?: string;
+};
+type GitRepositoryWithRemoteOpts = {
+    /**
+     * Push destination, when pushes go somewhere other than url. Empty uses url.
+     */
+    pushUrl?: string;
 };
 type HostDirectoryOpts = {
     /**
@@ -1662,17 +2002,55 @@ type LLMLoopOpts = {
      */
     maxTokens?: number;
 };
+type LLMSpawnOpts = {
+    /**
+     * Display label for the agent — telemetry and error messages; carries no identity. Defaults to a short name derived from the conversation.
+     */
+    name?: string;
+    /**
+     * The runtime handle to restore the instance under, as published on its loop span as dagger.io/agent.id. Omit to mint a fresh instance.
+     */
+    handle?: string;
+    /**
+     * The lifecycle state to create the agent in, as facts on the entry: IDLE is ready to be prompted, PAUSED parks it, FAILED holds an error a resume retries past, STOPPED preserves a dormant snapshot that send or resume can relaunch.
+     *
+     * RUNNING and WAITING_INPUT are refused: they describe a loop, and a restored loop died with the session that published it — restore such an agent as IDLE, its interrupted turn's input still pending on the conversation.
+     */
+    state?: AgentState;
+    /**
+     * The loop error to create the agent with, for state FAILED. Refused with any other state.
+     */
+    error?: string;
+};
 type LLMStepOpts = {
     /**
      * Cap the model's output tokens for this step. Defaults to the model's maximum.
      */
     maxTokens?: number;
 };
+type LLMWithContentOpts = {
+    /**
+     * The message's recorded provenance.
+     */
+    origin?: LLMMessageOriginInput;
+};
+type LLMWithContentFileOpts = {
+    /**
+     * The media MIME type; inferred from the file's contents when omitted.
+     */
+    mimeType?: string;
+};
 type LLMWithModelOpts = {
     /**
      * The provider serving the model, e.g. "openai". Overrides the provider otherwise inferred from the model name — useful when the name matches no known pattern (e.g. a fine-tune), or matches the wrong one.
      */
     provider?: string;
+};
+type LLMWithPromptOpts = {
+    /**
+     * The message's recorded provenance, when it arrived through an agent mailbox rather than from the user. Rendered to the model as an attribution header at request-build time.
+     */
+    origin?: LLMMessageOriginInput;
 };
 type LLMWithResponseOpts = {
     /**
@@ -1696,11 +2074,21 @@ type LLMWithResponseOpts = {
      */
     totalTokens?: number;
 };
+type LLMWithToolResultOpts = {
+    /**
+     * Ordered text and media returned by the tool
+     */
+    blocks?: LLMContentBlockInput[];
+};
 type LLMWithToolsOpts = {
     /**
      * Method names to exclude from the toolset (e.g. constructors, entrypoints).
      */
     except?: string[];
+    /**
+     * Version of this binding's state contract. Recomposition preserves compatible state when the version is unchanged and resets to the newly bound object's defaults when it differs. Change this when the state layout changes incompatibly. Same-type tool returns retain the version. Module identity and ownership checks still apply.
+     */
+    version?: number;
 };
 type LLMContentBlockInput = {
     /**
@@ -1712,13 +2100,29 @@ type LLMContentBlockInput = {
      */
     callId?: string;
     /**
+     * Ordered TEXT or media blocks returned by a tool.
+     */
+    content?: LLMContentBlockInput[];
+    /**
+     * Base64-encoded media bytes. Supply exactly one of data or file for media.
+     */
+    data?: string;
+    /**
      * Whether the tool call resulted in an error (for TOOL_RESULT kind).
      */
     errored?: boolean;
     /**
+     * A media file to resolve to inline bytes.
+     */
+    file?: File;
+    /**
      * The kind of content block.
      */
     kind: LLMContentBlockKind;
+    /**
+     * Media MIME type; required for inline data, inferred for a file.
+     */
+    mimeType?: string;
     /**
      * Provider-specific opaque data (e.g. Anthropic thinking signature).
      */
@@ -1736,6 +2140,18 @@ type LLMContentBlockInput = {
  * The kind of content in a message block.
  */
 declare enum LLMContentBlockKind {
+    /**
+     * Inline audio.
+     */
+    Audio = "AUDIO",
+    /**
+     * An inline PDF document.
+     */
+    Document = "DOCUMENT",
+    /**
+     * An inline image.
+     */
+    Image = "IMAGE",
     /**
      * Plain text content.
      */
@@ -1763,6 +2179,53 @@ declare function LLMContentBlockKindValueToName(value: LLMContentBlockKind): str
  * it can be properly used inside the module runtime.
  */
 declare function LLMContentBlockKindNameToValue(name: string): LLMContentBlockKind;
+type LLMMessageOriginInput = {
+    /**
+     * The display name of the sending or observed agent.
+     */
+    agentName?: string;
+    /**
+     * Who put this message on the record.
+     */
+    kind: LLMMessageOriginKind;
+    /**
+     * The message's short ref within the receiving agent's runtime, e.g. "#3".
+     */
+    ref?: string;
+    /**
+     * The ref of the message this one answers, if any.
+     */
+    replyTo?: string;
+};
+/**
+ * EXPERIMENTAL: Agent APIs are likely to change.
+ *
+ * Who put a message on the conversation record.
+ */
+declare enum LLMMessageOriginKind {
+    /**
+     * Another agent: the message was sent from within that agent's turn.
+     */
+    Agent = "AGENT",
+    /**
+     * The engine, reporting a subscribed agent's lifecycle transition.
+     */
+    Event = "EVENT",
+    /**
+     * The user: a prompt submitted by a client rather than sent by an agent.
+     */
+    User = "USER"
+}
+/**
+ * Utility function to convert a LLMMessageOriginKind value to its name so
+ * it can be uses as argument to call a exposed function.
+ */
+declare function LLMMessageOriginKindValueToName(value: LLMMessageOriginKind): string;
+/**
+ * Utility function to convert a LLMMessageOriginKind name to its value so
+ * it can be properly used inside the module runtime.
+ */
+declare function LLMMessageOriginKindNameToValue(name: string): LLMMessageOriginKind;
 /**
  * The role that generated a message.
  */
@@ -1790,22 +2253,6 @@ declare function LLMMessageRoleValueToName(value: LLMMessageRole): string;
  * it can be properly used inside the module runtime.
  */
 declare function LLMMessageRoleNameToValue(name: string): LLMMessageRole;
-type ModuleChecksOpts = {
-    /**
-     * Only include checks matching the specified patterns
-     */
-    include?: string[];
-    /**
-     * When true, only return annotated check functions; exclude generate-as-checks
-     */
-    noGenerate?: boolean;
-};
-type ModuleGeneratorsOpts = {
-    /**
-     * Only include generators matching the specified patterns
-     */
-    include?: string[];
-};
 type ModuleServeOpts = {
     /**
      * Expose the dependencies of this module to the client
@@ -1815,12 +2262,6 @@ type ModuleServeOpts = {
      * Install the module as the entrypoint, promoting its main-object methods onto the Query root
      */
     entrypoint?: boolean;
-};
-type ModuleServicesOpts = {
-    /**
-     * Only include services matching the specified patterns
-     */
-    include?: string[];
 };
 /**
  * Experimental features of a module
@@ -2092,6 +2533,12 @@ type ClientSecretOpts = {
      */
     cacheKey?: string;
 };
+type ClientServeModuleOpts = {
+    /**
+     * The pinned version of a remote module address.
+     */
+    refPin?: string;
+};
 type ClientSshfsVolumeOpts = {
     /**
      * known_hosts material used to verify the remote host key. Required unless insecureSkipHostKeyCheck is true.
@@ -2163,6 +2610,12 @@ type ServiceEndpointOpts = {
      * Return a URL with the given scheme, eg. http for http://
      */
     scheme?: string;
+};
+type ServicePortsOpts = {
+    /**
+     * Return only container ports declared before startup. Other service types return an empty list.
+     */
+    declared?: boolean;
 };
 type ServiceStopOpts = {
     /**
@@ -2384,9 +2837,9 @@ declare function TypeDefKindNameToValue(name: string): TypeDefKind;
 type Void = string & {
     __Void: never;
 };
-type WorkspaceAgentsOpts = {
+type WorkspaceArtifactsOpts = {
     /**
-     * Only include agents matching the specified patterns
+     * Only include artifacts matching these path patterns, as with checks and services. A path selects that path and its children.
      */
     include?: string[];
 };
@@ -2396,29 +2849,25 @@ type WorkspaceChangesOpts = {
      */
     from?: Workspace;
 };
-type WorkspaceChecksOpts = {
+type WorkspaceCompareCommitsFromOpts = {
     /**
-     * Only include checks matching the specified patterns
+     * Full lowercase commit hashes or unambiguous lowercase hex prefixes (4-40 characters) to select, in any order. Prefixes resolve against the frozen source's Git objects and are recorded as full hashes; duplicate selections after resolution are rejected. Empty selects all new source commits. Selected commits must be within the source's latest 10000 commits.
      */
-    include?: string[];
+    commits?: string[];
     /**
-     * Skip checks matching the specified patterns
+     * Maximum commits in either differing history, from 1 to 1000. Exceeding the limit fails; nothing is silently omitted.
      */
-    skip?: string[];
-    /**
-     * When true, only return annotated check functions; exclude generate-as-checks
-     */
-    noGenerate?: boolean;
-    /**
-     * When true, only return generate-as-checks; exclude annotated check functions
-     */
-    onlyGenerate?: boolean;
+    maxCommits?: number;
 };
 type WorkspaceConfigReadOpts = {
     /**
      * Dotted key path (e.g. modules.greeter.source). Empty for full config.
      */
     key?: string;
+    /**
+     * Include the selected environment, user overrides, and legacy workspace settings.
+     */
+    effective?: boolean;
 };
 type WorkspaceDirectoryOpts = {
     /**
@@ -2433,6 +2882,16 @@ type WorkspaceDirectoryOpts = {
      * Apply .gitignore filter rules inside the directory.
      */
     gitignore?: boolean;
+};
+type WorkspaceExportOpts = {
+    /**
+     * Destination checkout path on the calling client. Relative paths start at the client's working directory. Omit to use the calling client's current local workspace root.
+     */
+    path?: string;
+    /**
+     * Earlier workspace state to compare against. For Git integration, live inputs are snapshotted at export time; use a snapshot to retain the baseline of a previous export.
+     */
+    from?: Workspace;
 };
 type WorkspaceFindRootsOpts = {
     /**
@@ -2454,11 +2913,17 @@ type WorkspaceFindUpOpts = {
      */
     from?: string;
 };
-type WorkspaceGeneratorsOpts = {
+type WorkspaceMigrateOpts = {
     /**
-     * Only include generators matching the specified patterns
+     * Additional local modules to migrate. Relative paths start at the workspace cwd; absolute paths start at the workspace root.
      */
-    include?: string[];
+    modules?: string[];
+};
+type WorkspaceMigrateModuleOpts = {
+    /**
+     * Module directory. Relative paths start at the workspace cwd; absolute paths start at the workspace root.
+     */
+    path?: string;
 };
 type WorkspaceSearchOpts = {
     /**
@@ -2506,18 +2971,6 @@ type WorkspaceSearchOpts = {
      */
     limit?: number;
 };
-type WorkspaceServicesOpts = {
-    /**
-     * Only include services matching the specified patterns
-     */
-    include?: string[];
-};
-type WorkspaceTerminalsOpts = {
-    /**
-     * Only include terminal targets matching the specified patterns
-     */
-    include?: string[];
-};
 type WorkspaceWithClientOpts = {
     /**
      * Optional SDK name. Inspect all installed SDKs when omitted.
@@ -2527,6 +2980,30 @@ type WorkspaceWithClientOpts = {
      * Explicit SDK-module constructor setting overrides for this scope. Requires an explicit SDK name.
      */
     settings?: JSON;
+};
+type WorkspaceWithCommitOpts = {
+    /**
+     * Author and committer name. Defaults to git config user.name in the calling client's working directory, otherwise Dagger.
+     */
+    authorName?: string;
+    /**
+     * Author and committer email. Defaults to git config user.email in the calling client's working directory, otherwise dagger@localhost.
+     */
+    authorEmail?: string;
+    /**
+     * Add a Signed-off-by trailer using the commit author's name and email.
+     */
+    signoff?: boolean;
+};
+type WorkspaceWithCommitsFromOpts = {
+    /**
+     * Full lowercase commit hashes or unambiguous lowercase hex prefixes (4-40 characters) to select, in any order. Prefixes resolve against the frozen source's Git objects and are recorded as full hashes; duplicate selections after resolution are rejected. Empty selects all new source commits. Selected commits must be within the source's latest 10000 commits.
+     */
+    commits?: string[];
+    /**
+     * Maximum commits in either differing history, from 1 to 1000. Exceeding the limit fails; nothing is silently omitted.
+     */
+    maxCommits?: number;
 };
 type WorkspaceWithConfigEnvOpts = {
     /**
@@ -2560,6 +3037,14 @@ type WorkspaceWithInitModuleOpts = {
      */
     path?: string;
     /**
+     * Install the module. When omitted, install only if path is omitted.
+     */
+    install?: boolean;
+    /**
+     * Select this module as the entrypoint and install it. False prevents automatic selection. When omitted, select only if both path and name are omitted and the module is installed.
+     */
+    entrypoint?: boolean;
+    /**
      * Explicit SDK-module constructor setting overrides for this scope.
      */
     settings?: JSON;
@@ -2579,6 +3064,12 @@ type WorkspaceWithNewFileOpts = {
      * Permissions of the new file.
      */
     permissions?: number;
+};
+type WorkspaceWithResetOpts = {
+    /**
+     * Discard uncommitted changes, resetting the working tree to the commit.
+     */
+    hard?: boolean;
 };
 type WorkspaceWithSdkOpts = {
     /**
@@ -2616,9 +3107,13 @@ type WorkspaceWithUpdatedLockOpts = {
 };
 type WorkspaceWithUpdatedModulesOpts = {
     /**
-     * Installed module names to refresh. An empty list refreshes all installed modules.
+     * Installed module names or sources. A version suffix sets a new request. An empty list refreshes all installed modules.
      */
     names?: string[];
+    /**
+     * New version request for exactly one selected module. Cannot be combined with a version suffix.
+     */
+    version?: string;
 };
 type WorkspaceWithoutClientOpts = {
     /**
@@ -2650,6 +3145,64 @@ type WorkspaceWithoutSdkOpts = {
      */
     here?: boolean;
 };
+/**
+ * Why a source commit cannot be pulled.
+ */
+declare enum WorkspaceCommitPickReason {
+    /**
+     * The patch conflicts with committed content.
+     */
+    Content = "CONTENT",
+    /**
+     * The commit touches uncommitted paths in the receiving workspace.
+     */
+    Dirty = "DIRTY",
+    /**
+     * No conflict.
+     */
+    None = "NONE"
+}
+/**
+ * Utility function to convert a WorkspaceCommitPickReason value to its name so
+ * it can be uses as argument to call a exposed function.
+ */
+declare function WorkspaceCommitPickReasonValueToName(value: WorkspaceCommitPickReason): string;
+/**
+ * Utility function to convert a WorkspaceCommitPickReason name to its value so
+ * it can be properly used inside the module runtime.
+ */
+declare function WorkspaceCommitPickReasonNameToValue(name: string): WorkspaceCommitPickReason;
+/**
+ * Whether a source commit can be pulled.
+ */
+declare enum WorkspaceCommitPickStatus {
+    /**
+     * The commit cannot be applied; see reason and conflictPaths.
+     */
+    Conflict = "CONFLICT",
+    /**
+     * The commit can be applied.
+     */
+    Pickable = "PICKABLE",
+    /**
+     * The commit is already present by hash or cherry-pick origin.
+     */
+    Picked = "PICKED",
+    /**
+     * The patch is already present, or applying it would be empty.
+     */
+    Redundant = "REDUNDANT"
+}
+/**
+ * Utility function to convert a WorkspaceCommitPickStatus value to its name so
+ * it can be uses as argument to call a exposed function.
+ */
+declare function WorkspaceCommitPickStatusValueToName(value: WorkspaceCommitPickStatus): string;
+/**
+ * Utility function to convert a WorkspaceCommitPickStatus name to its value so
+ * it can be properly used inside the module runtime.
+ */
+declare function WorkspaceCommitPickStatusNameToValue(name: string): WorkspaceCommitPickStatus;
 type __DirectiveArgsOpts = {
     includeDeprecated?: boolean;
 };
@@ -2724,54 +3277,545 @@ declare class Address extends BaseClient {
      */
     workspace: () => Workspace;
 }
+/**
+ * EXPERIMENTAL: Agent APIs are likely to change.
+ *
+ * A conversation loop running as an addressable, long-lived entity within the session. The conversation itself remains observable at any time as an immutable LLM value.
+ */
 declare class Agent extends BaseClient {
     private readonly _id?;
-    private readonly _description?;
+    private readonly _error?;
+    private readonly _handle?;
     private readonly _name?;
+    private readonly _notify?;
+    private readonly _pause?;
+    private readonly _reseed?;
+    private readonly _resume?;
+    private readonly _send?;
+    private readonly _state?;
+    private readonly _stop?;
+    private readonly _wait?;
     /**
      * Constructor is used for internal usage only, do not create object from it.
      */
-    constructor(ctx?: Context, _id?: ID, _description?: string, _name?: string);
+    constructor(ctx?: Context, _id?: ID, _error?: string, _handle?: string, _name?: string, _notify?: ID, _pause?: ID, _reseed?: ID, _resume?: ID, _send?: ID, _state?: AgentState, _stop?: ID, _wait?: ID);
     /**
      * A unique identifier for this Agent.
      */
     id: () => Promise<ID>;
     /**
-     * The description of the agent
+     * Why the loop failed, for a FAILED agent; empty otherwise.
+     *
+     * The snapshot holds the completed prefix — send or resume retries from it.
+     * @experimental
      */
-    description: () => Promise<string>;
+    error: () => Promise<string>;
     /**
-     * Return the fully qualified name of the agent
+     * The opaque runtime handle minted by the spawn that created this agent.
+     *
+     * It is the same value the agent's loop span publishes as dagger.io/agent.id, so a client can correlate the agent with what it discovers in the trace. Two spawns of an identical composition have different handles; a display name is shared freely.
+     * @experimental
+     */
+    handle: () => Promise<string>;
+    /**
+     * Look up a previously sent message by its ref.
+     *
+     * This is the lookup send pins its result's identity through: the returned handle's ID is an honest, replayable chain, addressable from any request in the session (the cancel-and-request-again contract).
+     *
+     * Fails if the agent has no runtime entry in this session, or no record of the given ref.
+     * @param ref The message's short ref within this agent's runtime, e.g. "#3": the token its attribution header shows and a reply's replyTo names. A bare ordinal ("3") is accepted too.
+     * @experimental
+     */
+    message: (ref: string) => AgentMessage;
+    /**
+     * Display label for the agent; carries no identity.
+     * @experimental
      */
     name: () => Promise<string>;
     /**
-     * The original module in which the agent has been defined
+     * Subscribe another agent to this agent's lifecycle: each transition into one of the given states enqueues an event message to the subscriber — steering its open turn, or waking it if idle, like any other message.
+     *
+     * This is how a supervisor hears every completion and failure without polling or blocking: subscribe at spawn time, keep working, and events arrive as attributed messages.
+     *
+     * Events never relaunch a stopped subscriber, and an already-reached state fires immediately at subscribe time, so a fast agent settling before the subscription lands is not missed.
+     *
+     * Idempotent per subscriber; re-subscribing replaces the state set.
+     * @param subscriber The agent to deliver event messages to. You must hold its handle: subscriptions are capability-based like everything else.
+     * @param opts.on The lifecycle states that fire an event. IDLE events carry the turn's final reply; FAILED events carry the loop error.
+     * @experimental
      */
-    originalModule: () => Module_;
+    notify: (subscriber: Agent, opts?: AgentNotifyOpts) => Promise<Agent>;
     /**
-     * The path of the agent within its module
+     * Stop draining the mailbox once the in-flight step completes, or immediately with interrupt.
+     *
+     * Pause takes priority over pending work: a mid-turn pause suspends the turn, which resume continues. Messages sent while paused enqueue with QUEUED delivery until a resume.
+     *
+     * Pausing a never-started agent leaves it paused for its eventual resume; pausing a failed agent is allowed (resume decides the retry); pausing a stopped agent fails.
+     * @param opts.interrupt Preempt the in-flight step instead of letting it finish. All completed steps are kept and the interrupted turn stays open: messages it consumed remain pending, while unconsumed mailbox messages are discarded. Resume continues the turn from the last committed step. On an idle, never-started, or failed agent there is nothing to preempt, so this is a plain pause.
+     * @experimental
+     */
+    pause: (opts?: AgentPauseOpts) => Promise<Agent>;
+    /**
+     * Replace this instance's committed conversation with the given one, keeping the entry: identity, mailbox, and lifecycle state are untouched. A paused suspended turn is abandoned and its consumed messages are resolved before replacement.
+     *
+     * This is the continuity verb. Compaction, a workspace rebind, a model change, or rewinding an interrupted prompt produce a new conversation value for the SAME agent; reseed swaps it in place, where a stop-and-respawn would mint a successor instance and split the agent across two roster entries. It is the client-facing form of what a continuation tool already does mid-turn: the agent adopts a new conversation without changing who it is.
+     *
+     * The next turn continues from the reseeded conversation, and queued messages drain onto it. A FAILED agent keeps its error — resume retries from the new conversation.
+     *
+     * Fails if the instance has no runtime entry in this session (only a spawned or re-hydrated instance holds a conversation to replace), if a step is in flight, or if the agent is stopped.
+     * @param conversation The conversation that becomes the agent's committed history, replacing the current one.
+     * @experimental
+     */
+    reseed: (conversation: LLM) => Promise<Agent>;
+    /**
+     * Resume draining the mailbox: a suspended turn continues from the last committed step, and queued messages drain.
+     *
+     * Resuming a never-started agent starts its evaluation loop, detached from the calling request: it steps the conversation while input is pending, then idles awaiting further lifecycle operations. Resuming a FAILED agent retries its pending step. Resuming a STOPPED agent relaunches the same instance from its last committed snapshot.
+     *
+     * No-op on a running or idle agent.
+     * @experimental
+     */
+    resume: () => Promise<Agent>;
+    /**
+     * Enqueue a message, on the record: it is consumed at a step boundary, appends to the agent's history, and steers the running turn or opens a new one.
+     *
+     * Never blocks, never drops; concurrent sends queue in order.
+     *
+     * The returned message is pinned through the message lookup field, so its handle is re-addressable from any request in the session: cancel a response request and request it again freely.
+     *
+     * Sending to a never-started agent starts it (signal-with-start). Sending to a stopped agent restarts the same instance from its last committed snapshot. Sending to a paused or failed agent enqueues with QUEUED delivery, to be drained by a resume.
+     * @param message The message text, appended to the agent's history as a prompt when a turn consumes it. When content is supplied, nonempty text precedes those blocks in the same user message.
+     * @param opts.replyTo The ref of a message in the SENDER's own mailbox this send answers (e.g. "#3", from its attribution header). The recipient sees the two paired, and awaiters of the replied-to message resolve with this reply immediately instead of at the sender's turn end.
+     * @param opts.content Ordered TEXT, IMAGE, AUDIO, or DOCUMENT user content blocks. File inputs are resolved and all content is validated before enqueueing. Pass an empty message for media-only sends.
+     * @experimental
+     */
+    send: (message: string, opts?: AgentSendOpts) => Promise<ID>;
+    /**
+     * The conversation as of the last committed step: immutable, branchable, persistable.
+     *
+     * The seed conversation if the agent never stepped.
+     *
+     * Branching from it does not affect the agent.
+     * @experimental
+     */
+    snapshot: () => LLM;
+    /**
+     * Computed lifecycle state; never stored.
+     *
+     * An agent that was never started reports IDLE: its mailbox is empty and no turn is open.
+     * @experimental
+     */
+    state: () => Promise<AgentState>;
+    /**
+     * Release the agent's runtime. The tombstone (state, snapshot) stays readable for the rest of the session.
+     * @param opts.kill Cancel the loop immediately instead of letting an in-flight step finish. Either way the completed steps are preserved in the snapshot.
+     * @experimental
+     */
+    stop: (opts?: AgentStopOpts) => Promise<Agent>;
+    /**
+     * Block until the agent settles: IDLE, FAILED, or STOPPED. Read which from state afterwards.
+     *
+     * Unlike waiting for one exact state, this cannot hang merely because the agent settled in a different outcome.
+     * @experimental
+     */
+    wait: () => Promise<Agent>;
+}
+/**
+ * EXPERIMENTAL: Agent APIs are likely to change.
+ *
+ * A message delivered to an agent's mailbox.
+ */
+declare class AgentMessage extends BaseClient {
+    private readonly _id?;
+    private readonly _delivery?;
+    private readonly _ref?;
+    private readonly _response?;
+    /**
+     * Constructor is used for internal usage only, do not create object from it.
+     */
+    constructor(ctx?: Context, _id?: ID, _delivery?: AgentMessageDelivery, _ref?: string, _response?: string);
+    /**
+     * A unique identifier for this AgentMessage.
+     */
+    id: () => Promise<ID>;
+    /**
+     * How the message conclusively landed: opened a new turn (STARTED), was absorbed into the running turn at a step boundary (STEERED), or queued behind it (QUEUED).
+     *
+     * Blocks until provider or native lifecycle evidence is conclusive. Once recorded, the result or cancellation error is immutable.
+     * @experimental
+     */
+    delivery: () => Promise<AgentMessageDelivery>;
+    /**
+     * The message's short ref within the receiving agent's runtime, e.g. "#3".
+     *
+     * This is the deterministic token the recipient's attribution header shows and a reply's replyTo names — quote it when telling the recipient what to answer.
+     * @experimental
+     */
+    ref: () => Promise<string>;
+    /**
+     * Block until this message is answered, and return the answer: an explicit reply (a send whose replyTo names this message), or the final reply of the turn that consumed it, whichever comes first.
+     *
+     * Idempotent: cancel and request the response again freely; concurrent waiters share the result.
+     *
+     * Fails if the agent stops before the message resolves. On a failed agent it projects the failure — but the message stays pending, so after a resume consumes it, requesting the response again returns the real reply.
+     *
+     * Refused when called from inside an agent turn whose wait would deadlock: turns should not block on other agents — send without awaiting, and the reply arrives as a message.
+     * @experimental
+     */
+    response: () => Promise<string>;
+}
+/**
+ * One workspace value with a complete path and all required dimension keys. Reading metadata does not evaluate the value. Different addresses remain distinct even if they return the same object.
+ */
+declare class Artifact extends BaseClient {
+    private readonly _id?;
+    private readonly _description?;
+    private readonly _loadError?;
+    private readonly _moduleName?;
+    private readonly _uri?;
+    /**
+     * Constructor is used for internal usage only, do not create object from it.
+     */
+    constructor(ctx?: Context, _id?: ID, _description?: string, _loadError?: string, _moduleName?: string, _uri?: string);
+    /**
+     * A unique identifier for this Artifact.
+     */
+    id: () => Promise<ID>;
+    /**
+     * The arguments accepted by the artifact field.
+     */
+    arguments_: () => Promise<FunctionArg[]>;
+    /**
+     * The description of the field that supplies this artifact.
+     */
+    description: () => Promise<string>;
+    /**
+     * The module name, collection keys, and full path key in the artifact type dimension.
+     */
+    dimensionKeys: () => Promise<ArtifactDimensionKey[]>;
+    /**
+     * The directives carried by this artifact.
+     */
+    directives: () => Promise<string[]>;
+    /**
+     * A module load failure, or an empty string if discovery succeeded.
+     */
+    loadError: () => Promise<string>;
+    /**
+     * The installed module name.
+     */
+    moduleName: () => Promise<string>;
+    /**
+     * Ordered, literal fields to follow. Entrypoint targets use their shorthand.
      */
     path: () => Promise<string[]>;
+    /**
+     * The artifact's DAG address, such as dag://engine-dev/playground.
+     * @param opts.absolute Prefix the workspace's Git address and commit: dag://<workspace>@<commit>:<path>. Fails if the workspace has no Git address.
+     * @param opts.dimensionKeys Include the dimension keys as a query. Without them, the address is a path selector.
+     * @param opts.typeAssertion Include the artifact type in the scheme: dag+container://.
+     */
+    uri: (opts?: ArtifactUriOpts) => Promise<string>;
+    /**
+     * Evaluate the target in the workspace that supplied this artifact.
+     * @param opts.arguments Field arguments as a JSON object.
+     */
+    value: (opts?: ArtifactValueOpts) => Node;
 }
-declare class AgentGroup extends BaseClient {
+declare class ArtifactDimension extends BaseClient {
+    private readonly _id?;
+    private readonly _collectionType?;
+    private readonly _identifier?;
+    private readonly _itemType?;
+    private readonly _keyDescription?;
+    private readonly _keyName?;
+    private readonly _kind?;
+    private readonly _name?;
+    private readonly _qualifiedName?;
+    /**
+     * Constructor is used for internal usage only, do not create object from it.
+     */
+    constructor(ctx?: Context, _id?: ID, _collectionType?: string, _identifier?: string, _itemType?: string, _keyDescription?: string, _keyName?: string, _kind?: ArtifactDimensionKind, _name?: string, _qualifiedName?: string);
+    /**
+     * A unique identifier for this ArtifactDimension.
+     */
+    id: () => Promise<ID>;
+    /**
+     * The collection type, or null for a static dimension.
+     */
+    collectionType: () => Promise<string>;
+    /**
+     * Stable identifier: ParentType.field for a collection, type:TypeName for an artifact type, or module.
+     */
+    identifier: () => Promise<string>;
+    /**
+     * The collection item or artifact type name, or empty for the module dimension.
+     */
+    itemType: () => Promise<string>;
+    /**
+     * The collection key argument description, or empty for a static dimension.
+     */
+    keyDescription: () => Promise<string>;
+    /**
+     * The collection key argument name, or name for a static dimension.
+     */
+    keyName: () => Promise<string>;
+    /**
+     * How this dimension gets its keys.
+     */
+    kind: () => Promise<ArtifactDimensionKind>;
+    /**
+     * Short name used to select this dimension.
+     */
+    name: () => Promise<string>;
+    /**
+     * Qualified name used when the short name is ambiguous.
+     */
+    qualifiedName: () => Promise<string>;
+}
+declare class ArtifactDimensionKey extends BaseClient {
+    private readonly _id?;
+    private readonly _dimension?;
+    private readonly _key?;
+    /**
+     * Constructor is used for internal usage only, do not create object from it.
+     */
+    constructor(ctx?: Context, _id?: ID, _dimension?: string, _key?: string);
+    /**
+     * A unique identifier for this ArtifactDimensionKey.
+     */
+    id: () => Promise<ID>;
+    /**
+     * The dimension identifier, fixed across the workspace schema.
+     */
+    dimension: () => Promise<string>;
+    /**
+     * The dimension item's key.
+     */
+    key: () => Promise<string>;
+}
+/**
+ * A schema path and its dimensions. The path can exist even when its collections have no runtime items.
+ */
+declare class ArtifactPath extends BaseClient {
+    private readonly _id?;
+    private readonly _description?;
+    private readonly _loadError?;
+    private readonly _moduleName?;
+    private readonly _uri?;
+    /**
+     * Constructor is used for internal usage only, do not create object from it.
+     */
+    constructor(ctx?: Context, _id?: ID, _description?: string, _loadError?: string, _moduleName?: string, _uri?: string);
+    /**
+     * A unique identifier for this ArtifactPath.
+     */
+    id: () => Promise<ID>;
+    /**
+     * The description of the field at this path.
+     */
+    description: () => Promise<string>;
+    /**
+     * The dimension identifiers required by this path.
+     */
+    dimensions: () => Promise<string[]>;
+    /**
+     * A module load failure for this path, or an empty string.
+     */
+    loadError: () => Promise<string>;
+    /**
+     * The installed module name.
+     */
+    moduleName: () => Promise<string>;
+    /**
+     * The DAG address of this path, without dimension keys.
+     */
+    uri: () => Promise<string>;
+}
+declare class ArtifactResult extends BaseClient {
     private readonly _id?;
     /**
      * Constructor is used for internal usage only, do not create object from it.
      */
     constructor(ctx?: Context, _id?: ID);
     /**
-     * A unique identifier for this AgentGroup.
+     * A unique identifier for this ArtifactResult.
      */
     id: () => Promise<ID>;
     /**
-     * Compose all selected agent middlewares onto a base LLM, in alphabetical module:fn order, and return the composed LLM.
-     * @param opts.base The base LLM to compose onto. Defaults to a fresh workspace-bound LLM.
+     * The artifact that was evaluated.
      */
-    compose: (opts?: AgentGroupComposeOpts) => LLM;
+    artifact: () => Artifact;
     /**
-     * Return a list of individual agents and their details
+     * The evaluation failure, if any.
      */
-    list: () => Promise<Agent[]>;
+    error: () => Promise<Error$1 | null>;
+    /**
+     * The evaluated value, or null when evaluation failed.
+     */
+    value: () => Promise<Node | null>;
+}
+/**
+ * An immutable selection of workspace artifacts. Listed types, dimensions, and keys use OR; chained filters use AND. Empty alternatives and unknown names match nothing. Filters never change addresses or dimension identifiers.
+ */
+declare class Artifacts extends BaseClient {
+    private readonly _id?;
+    private readonly _uri?;
+    /**
+     * Constructor is used for internal usage only, do not create object from it.
+     */
+    constructor(ctx?: Context, _id?: ID, _uri?: string);
+    /**
+     * A unique identifier for this Artifacts.
+     */
+    id: () => Promise<ID>;
+    /**
+     * Convert the selection to Changesets. Fail if any artifact is not a Changeset. Does not apply command filters.
+     */
+    asChangesets: () => Promise<Changeset[]>;
+    /**
+     * Convert the selection to Checks. Fail if any artifact is not a Check. Does not apply command filters or run the checks.
+     */
+    asChecks: () => Promise<Check[]>;
+    /**
+     * Convert the selection to expertise without running the functions. Fail if any artifact is not a source of expertise.
+     */
+    asExpertise: () => Promise<Expertise[]>;
+    /**
+     * Convert the selection to Generators without running them. Fail if any artifact is not a Generator.
+     */
+    asGenerators: () => Promise<Generator[]>;
+    /**
+     * Convert the selection to Services. Fail if any artifact is not a Service. Does not apply command filters or start the services.
+     */
+    asServices: () => Promise<Service[]>;
+    /**
+     * List dimensions on the selected schema paths, including empty collections. Does not read runtime values.
+     */
+    dimensionDefinitions: () => Promise<ArtifactDimension[]>;
+    /**
+     * List collection items represented in this selection for the given dimension. Preserve parent keys and remove duplicate item addresses. Does not evaluate item values.
+     */
+    dimensionItems: (dimension: string) => Promise<Artifact[]>;
+    /**
+     * List keys represented in this selection for the given dimension, sorted with no duplicates.
+     */
+    dimensionKeys: (dimension: string) => Promise<string[]>;
+    /**
+     * List dimension identifiers represented in this selection, sorted with no duplicates.
+     */
+    dimensions: () => Promise<string[]>;
+    /**
+     * Select Expertise artifacts.
+     * @deprecated Use filterTypes with Expertise.
+     */
+    filterAgentCommand: () => Artifacts;
+    /**
+     * Select Check artifacts for dagger check, using each workspace's check and generator settings. Include staleness checks from Generators.
+     * @param opts.generated Include generated-file checks. Defaults to the workspace check-generated setting, or true when unset.
+     * @deprecated Use filterTypes and apply workspace settings in the caller.
+     */
+    filterCheckCommand: (opts?: ArtifactsFilterCheckCommandOpts) => Artifacts;
+    /**
+     * Keep artifacts with any listed key in this dimension.
+     */
+    filterDimensionKeys: (dimension: string, keys: string[]) => Artifacts;
+    /**
+     * Keep artifacts selected through any listed dimension.
+     */
+    filterDimensions: (dimensions: string[]) => Artifacts;
+    /**
+     * Keep artifacts with any listed directive. Does not filter by type or workspace settings.
+     * @param opts.exclude Remove the matching artifacts instead.
+     */
+    filterDirectives: (directives: string[], opts?: ArtifactsFilterDirectivesOpts) => Artifacts;
+    /**
+     * Select Generator artifacts, using each workspace's generator settings.
+     * @deprecated Use filterTypes and apply workspace settings in the caller.
+     */
+    filterGenerateCommand: () => Artifacts;
+    /**
+     * Keep artifacts whose immediate parent has any listed directive. Artifacts without a parent do not match.
+     * @param opts.exclude Remove the matching artifacts instead.
+     */
+    filterParentDirectives: (directives: string[], opts?: ArtifactsFilterParentDirectivesOpts) => Artifacts;
+    /**
+     * Keep artifacts whose immediate parent has any listed object type. Artifacts without a typed parent do not match.
+     * @param opts.exclude Remove the matching artifacts instead.
+     */
+    filterParentTypes: (types: string[], opts?: ArtifactsFilterParentTypesOpts) => Artifacts;
+    /**
+     * Match one complete, ordered field sequence exactly.
+     */
+    filterPath: (path: string[]) => Artifacts;
+    /**
+     * Keep paths that match a glob pattern. A literal path matches exactly. Both module-qualified and entrypoint paths match.
+     */
+    filterPathPattern: (pattern: string) => Artifacts;
+    /**
+     * Keep artifacts of any listed concrete GraphQL type.
+     * @param opts.exclude Remove the matching artifacts instead.
+     */
+    filterTypes: (types: string[], opts?: ArtifactsFilterTypesOpts) => Artifacts;
+    /**
+     * Select Service artifacts, using each workspace's service settings. Does not require the up directive.
+     * @deprecated Use filterTypes and apply workspace settings in the caller.
+     */
+    filterUpCommand: () => Artifacts;
+    /**
+     * Apply a DAG address as one filter: the chain of path, type, and dimension-key filters it encodes.
+     *
+     * The scheme is optional. The path may be a pattern; an empty path selects all artifacts.
+     * @param uri A DAG address: [dag[+<type>]://][<path>][?<dimension>=<key>&...]
+     */
+    filterUri: (uri: string) => Artifacts;
+    /**
+     * Enumerate complete artifacts without evaluating their values.
+     */
+    items: () => Promise<Artifact[]>;
+    /**
+     * List the modules represented in this selection without evaluating artifact values.
+     */
+    modules: () => Promise<Module_[]>;
+    /**
+     * Require exactly one artifact; fail if there are zero or multiple matches. Several matches are listed, one address per line.
+     */
+    one: () => Artifact;
+    /**
+     * List selected schema paths, including empty collections. Does not read runtime values. Applies type keys and collection presence; collection key values require items.
+     * @param opts.absolute Prefix each address with the workspace's Git address and commit.
+     * @param opts.typeAssertion Include the artifact type in each address scheme.
+     * @param opts.dimension Project paths to the items of this collection dimension. Preserve parent dimensions and remove descendant dimensions.
+     */
+    pathDefinitions: (opts?: ArtifactsPathDefinitionsOpts) => Promise<ArtifactPath[]>;
+    /**
+     * List concrete type definitions represented in this selection, sorted by name with no duplicates.
+     */
+    types: () => Promise<TypeDef[]>;
+    /**
+     * The DAG address that selects this whole selection: filterUri(uri) selects the same set.
+     */
+    uri: () => Promise<string>;
+    /**
+     * Evaluate the selection in parallel, retaining each result and error.
+     * @param opts.failFast Cancel remaining work after the first failure.
+     * @param opts.arguments Field arguments applied to each artifact, as a JSON object.
+     */
+    values: (opts?: ArtifactsValuesOpts) => Promise<ArtifactResult[]>;
+    /**
+     * Combine two selections, keeping each workspace address once. Different addresses remain distinct even if they return the same object.
+     */
+    withArtifacts: (artifacts: Artifacts) => Artifacts;
+    /**
+     * Remove artifacts selected by a DAG address.
+     */
+    withoutUri: (uri: string) => Artifacts;
+    /**
+     * Call the provided function with current Artifacts.
+     *
+     * This is useful for reusability and readability by not breaking the calling chain.
+     */
+    with: (arg: (param: Artifacts) => Artifacts) => Artifacts;
 }
 /**
  * A directory whose contents persist across runs.
@@ -2829,6 +3873,14 @@ declare class Changeset extends BaseClient {
      */
     export: (path: string) => Promise<string>;
     /**
+     * Select changes matching the supplied glob patterns, preserving their original baseline.
+     *
+     * Includes additions, modifications, and deletions. Selecting only one side of a rename yields an addition or deletion.
+     * @param opts.include Only include changes at paths matching these patterns. Empty includes all paths.
+     * @param opts.exclude Exclude changes at paths matching these patterns.
+     */
+    filter: (opts?: ChangesetFilterOpts) => Changeset;
+    /**
      * Returns true if the changeset is empty (i.e. there are no changes).
      */
     isEmpty: () => Promise<boolean>;
@@ -2873,98 +3925,47 @@ declare class Changeset extends BaseClient {
      */
     with: (arg: (param: Changeset) => Changeset) => Changeset;
 }
+/**
+ * One deferred check. Reading pass, error, or sync runs it.
+ */
 declare class Check extends BaseClient {
     private readonly _id?;
-    private readonly _checkType?;
-    private readonly _completed?;
-    private readonly _description?;
-    private readonly _name?;
-    private readonly _passed?;
-    private readonly _resultEmoji?;
+    private readonly _assertion?;
+    private readonly _pass?;
     /**
      * Constructor is used for internal usage only, do not create object from it.
      */
-    constructor(ctx?: Context, _id?: ID, _checkType?: string, _completed?: boolean, _description?: string, _name?: string, _passed?: boolean, _resultEmoji?: string);
+    constructor(ctx?: Context, _id?: ID, _assertion?: string, _pass?: boolean);
     /**
      * A unique identifier for this Check.
      */
     id: () => Promise<ID>;
     /**
-     * The type of check: 'check' for annotated checks, 'generate' for generate-as-checks
+     * The assertion that is false when this check fails.
      */
-    checkType: () => Promise<string>;
+    assertion: () => Promise<string>;
     /**
-     * Whether the check completed
-     */
-    completed: () => Promise<boolean>;
-    /**
-     * The description of the check
-     */
-    description: () => Promise<string>;
-    /**
-     * If the check failed, this is the error
+     * Run the check and return its failure, if any.
      */
     error: () => Promise<Error$1 | null>;
     /**
-     * Return the fully qualified name of the check
+     * Run the check and return whether it passes.
      */
-    name: () => Promise<string>;
+    pass: () => Promise<boolean>;
     /**
-     * The original module in which the check has been defined
+     * An optional report produced by the check.
      */
-    originalModule: () => Module_;
+    report: () => Promise<Directory | null>;
     /**
-     * Whether the check passed
+     * Run the check and retain its result.
      */
-    passed: () => Promise<boolean>;
-    /**
-     * The path of the check within its module
-     */
-    path: () => Promise<string[]>;
-    /**
-     * An emoji representing the result of the check
-     */
-    resultEmoji: () => Promise<string>;
-    /**
-     * Execute the check
-     */
-    run: () => Check;
+    sync: () => Check;
     /**
      * Call the provided function with current Check.
      *
      * This is useful for reusability and readability by not breaking the calling chain.
      */
     with: (arg: (param: Check) => Check) => Check;
-}
-declare class CheckGroup extends BaseClient {
-    private readonly _id?;
-    /**
-     * Constructor is used for internal usage only, do not create object from it.
-     */
-    constructor(ctx?: Context, _id?: ID);
-    /**
-     * A unique identifier for this CheckGroup.
-     */
-    id: () => Promise<ID>;
-    /**
-     * Return a list of individual checks and their details
-     */
-    list: () => Promise<Check[]>;
-    /**
-     * Generate a markdown report
-     */
-    report: () => File;
-    /**
-     * Execute all selected checks
-     * @param opts.failFast If true, stop running checks as soon as any check fails.
-     */
-    run: (opts?: CheckGroupRunOpts) => CheckGroup;
-    /**
-     * Call the provided function with current CheckGroup.
-     *
-     * This is useful for reusability and readability by not breaking the calling chain.
-     */
-    with: (arg: (param: CheckGroup) => CheckGroup) => CheckGroup;
 }
 /**
  * An internal persistent filesync mirror.
@@ -2998,6 +3999,85 @@ declare class Cloud extends BaseClient {
      * The trace URL for the current session
      */
     traceURL: () => Promise<string>;
+}
+declare class CollectionDelta extends BaseClient {
+    private readonly _id?;
+    /**
+     * Constructor is used for internal usage only, do not create object from it.
+     */
+    constructor(ctx?: Context, _id?: ID);
+    /**
+     * A unique identifier for this CollectionDelta.
+     */
+    id: () => Promise<ID>;
+    /**
+     * Current keys absent from the original collection, in current order.
+     */
+    addedKeys: () => Promise<string[]>;
+    /**
+     * Original keys absent from the current collection, in original order.
+     */
+    removedKeys: () => Promise<string[]>;
+}
+declare class CollectionTypeDef extends BaseClient {
+    private readonly _id?;
+    /**
+     * Constructor is used for internal usage only, do not create object from it.
+     */
+    constructor(ctx?: Context, _id?: ID);
+    /**
+     * A unique identifier for this CollectionTypeDef.
+     */
+    id: () => Promise<ID>;
+    /**
+     * The type of batch operations, or null when there are none.
+     */
+    batchType: () => Promise<TypeDef | null>;
+    /**
+     * The type of collection keys.
+     */
+    keyType: () => TypeDef;
+    /**
+     * The object type returned by get.
+     */
+    valueType: () => TypeDef;
+}
+/**
+ * A command's arguments and execution settings.
+ */
+declare class Command extends BaseClient {
+    private readonly _id?;
+    private readonly _insecureRootCapabilities?;
+    private readonly _privilegedNesting?;
+    private readonly _workdir?;
+    /**
+     * Constructor is used for internal usage only, do not create object from it.
+     */
+    constructor(ctx?: Context, _id?: ID, _insecureRootCapabilities?: boolean, _privilegedNesting?: boolean, _workdir?: string);
+    /**
+     * A unique identifier for this Command.
+     */
+    id: () => Promise<ID>;
+    /**
+     * The command arguments.
+     */
+    args: () => Promise<string[]>;
+    /**
+     * Environment variable overrides. Other variables come from the container.
+     */
+    env: () => Promise<EnvVariable[]>;
+    /**
+     * Whether the command has all root capabilities.
+     */
+    insecureRootCapabilities: () => Promise<boolean>;
+    /**
+     * Whether the command has access to Dagger.
+     */
+    privilegedNesting: () => Promise<boolean>;
+    /**
+     * Working directory override. If unset, use the container's working directory.
+     */
+    workdir: () => Promise<string>;
 }
 /**
  * An OCI-compatible container, also known as a Docker container.
@@ -3036,7 +4116,7 @@ declare class Container extends BaseClient {
      *
      * If empty, the container's default command is used.
      * @param opts.useEntrypoint If the container has an entrypoint, prepend it to the args.
-     * @param opts.experimentalPrivilegedNesting Provides Dagger access to the executed command.
+     * @param opts.disableDaggerInDagger Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
      * @param opts.insecureRootCapabilities Execute the command with all root capabilities. This is similar to running a command with "sudo" or executing "docker run" with the "--privileged" flag. Containerization does not provide any security guarantees when using this option. It should only be used when absolutely necessary and only with trusted commands.
      * @param opts.expand Replace "${VAR}" or "$VAR" in the args according to the current environment variables defined in the container (e.g. "/$VAR/foo").
      * @param opts.noInit If set, skip the automatic init process injected into containers by default.
@@ -3259,6 +4339,11 @@ declare class Container extends BaseClient {
      */
     rootfs: () => Directory;
     /**
+     * Return the configured shell command. Defaults to ["sh"].
+     * @param opts.batch Return the batch command instead of the interactive command.
+     */
+    shell: (opts?: ContainerShellOpts) => Command;
+    /**
      * Return file status
      * @param path Path to check (e.g., "/file.txt").
      * @param opts.doNotFollowSymlinks If specified, do not follow symlinks.
@@ -3285,7 +4370,7 @@ declare class Container extends BaseClient {
     /**
      * Opens an interactive terminal for this container using its configured default terminal command if not overridden by args (or sh as a fallback default).
      * @param opts.cmd If set, override the container's default terminal command and invoke these command arguments instead.
-     * @param opts.experimentalPrivilegedNesting Provides Dagger access to the executed command.
+     * @param opts.disableDaggerInDagger Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
      * @param opts.insecureRootCapabilities Execute the command with all root capabilities. This is similar to running a command with "sudo" or executing "docker run" with the "--privileged" flag. Containerization does not provide any security guarantees when using this option. It should only be used when absolutely necessary and only with trusted commands.
      */
     terminal: (opts?: ContainerTerminalOpts) => Container;
@@ -3301,7 +4386,7 @@ declare class Container extends BaseClient {
      *
      * If empty, the container's default command is used.
      * @param opts.useEntrypoint If the container has an entrypoint, prepend it to the args.
-     * @param opts.experimentalPrivilegedNesting Provides Dagger access to the executed command.
+     * @param opts.disableDaggerInDagger Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
      * @param opts.insecureRootCapabilities Execute the command with all root capabilities. This is similar to running a command with "sudo" or executing "docker run" with the "--privileged" flag. Containerization does not provide any security guarantees when using this option. It should only be used when absolutely necessary and only with trusted commands.
      * @param opts.expand Replace "${VAR}" or "$VAR" in the args according to the current environment variables defined in the container (e.g. "/$VAR/foo").
      * @param opts.noInit If set, skip the automatic init process injected into containers by default.
@@ -3327,8 +4412,9 @@ declare class Container extends BaseClient {
     /**
      * Set the default command to invoke for the container's terminal API.
      * @param args The args of the command.
-     * @param opts.experimentalPrivilegedNesting Provides Dagger access to the executed command.
+     * @param opts.disableDaggerInDagger Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
      * @param opts.insecureRootCapabilities Execute the command with all root capabilities. This is similar to running a command with "sudo" or executing "docker run" with the "--privileged" flag. Containerization does not provide any security guarantees when using this option. It should only be used when absolutely necessary and only with trusted commands.
+     * @deprecated Use withShell.
      */
     withDefaultTerminalCmd: (args: string[], opts?: ContainerWithDefaultTerminalCmdOpts) => Container;
     /**
@@ -3394,7 +4480,7 @@ declare class Container extends BaseClient {
      * @param opts.redirectStdout Redirect the command's standard output to a file in the container. Example: "./stdout.txt"
      * @param opts.redirectStderr Redirect the command's standard error to a file in the container. Example: "./stderr.txt"
      * @param opts.expect Exit codes this command is allowed to exit with without error
-     * @param opts.experimentalPrivilegedNesting Provides Dagger access to the executed command.
+     * @param opts.disableDaggerInDagger Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
      * @param opts.insecureRootCapabilities Execute the command with all root capabilities. Like --privileged in Docker
      *
      * DANGER: this grants the command full access to the host system. Only use when 1) you trust the command being executed and 2) you specifically need this level of access.
@@ -3554,6 +4640,14 @@ declare class Container extends BaseClient {
      */
     withRootfs: (directory: Directory) => Container;
     /**
+     * Execute a script with the configured batch shell and return the modified container.
+     * @param command Script to append to the shell command as one argument.
+     * @param opts.shell Override the batch shell arguments. Example: ["bash", "-c"].
+     * @param opts.disableDaggerInDagger Override whether the shell is denied Dagger API access. Omit to use the configured shell setting.
+     * @param opts.insecureRootCapabilities Override whether the shell has all root capabilities.
+     */
+    withRun: (command: string, opts?: ContainerWithRunOpts) => Container;
+    /**
      * Set a new environment variable, using a secret value
      * @param name Name of the secret variable (e.g., "API_SECRET").
      * @param secret Identifier of the secret value.
@@ -3571,6 +4665,14 @@ declare class Container extends BaseClient {
      * @param service The target service
      */
     withServiceBinding: (alias: string, service: Service) => Container;
+    /**
+     * Set the shell used by terminal() and withRun().
+     * @param interactive Command arguments for interactive use. Example: ["sh"].
+     * @param opts.batch Command arguments for batch use. The script is appended as one argument. Defaults to interactive followed by "-c".
+     * @param opts.disableDaggerInDagger Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
+     * @param opts.insecureRootCapabilities Give the shell all root capabilities. Use only with trusted commands.
+     */
+    withShell: (interactive: string[], opts?: ContainerWithShellOpts) => Container;
     /**
      * Return a snapshot with a symlink
      * @param target Location of the file or directory to link to (e.g., "/existing/file").
@@ -3736,12 +4838,6 @@ declare class CurrentModule extends BaseClient {
      * The generated files and directories made on top of the module source's context directory.
      */
     generatedContextDirectory: () => Directory;
-    /**
-     * Return all generators defined by the module
-     * @param opts.include Only include generators matching the specified patterns
-     * @experimental
-     */
-    generators: (opts?: CurrentModuleGeneratorsOpts) => GeneratorGroup;
     /**
      * The name of the module being executed in
      */
@@ -3968,7 +5064,7 @@ declare class Directory extends BaseClient {
      * Opens an interactive terminal in new container with this directory mounted inside.
      * @param opts.container If set, override the default container used for the terminal.
      * @param opts.cmd If set, override the container's default terminal command and invoke these command arguments instead.
-     * @param opts.experimentalPrivilegedNesting Provides Dagger access to the executed command.
+     * @param opts.disableDaggerInDagger Disable Dagger API access for the executed command. By default, commands can connect to the current Dagger engine.
      * @param opts.insecureRootCapabilities Execute the command with all root capabilities. This is similar to running a command with "sudo" or executing "docker run" with the "--privileged" flag. Containerization does not provide any security guarantees when using this option. It should only be used when absolutely necessary and only with trusted commands.
      */
     terminal: (opts?: DirectoryTerminalOpts) => Directory;
@@ -4452,6 +5548,38 @@ declare class ErrorValue extends BaseClient {
     value: () => Promise<JSON>;
 }
 /**
+ * An agent function that can modify a conversation.
+ */
+declare class Expertise extends BaseClient {
+    private readonly _id?;
+    private readonly _description?;
+    private readonly _name?;
+    /**
+     * Constructor is used for internal usage only, do not create object from it.
+     */
+    constructor(ctx?: Context, _id?: ID, _description?: string, _name?: string);
+    /**
+     * A unique identifier for this Expertise.
+     */
+    id: () => Promise<ID>;
+    /**
+     * The agent function's description.
+     */
+    description: () => Promise<string>;
+    /**
+     * The agent function's name.
+     */
+    name: () => Promise<string>;
+    /**
+     * The module that defines the agent function.
+     */
+    originalModule: () => Module_;
+    /**
+     * The agent function's path within its module.
+     */
+    path: () => Promise<string[]>;
+}
+/**
  * An object that can be exported to the host.
  *
  * Calling export writes the object to a path on the host filesystem and returns the path that was written.
@@ -4681,7 +5809,8 @@ declare class Function_ extends BaseClient {
      */
     sourceModuleName: () => Promise<string>;
     /**
-     * Returns the function with a flag indicating it is an agent middleware.
+     * Returns the function with a flag indicating it is a source of expertise.
+     * @experimental
      */
     withAgent: () => Function_;
     /**
@@ -4903,108 +6032,37 @@ declare class GeneratedCode extends BaseClient {
      */
     with: (arg: (param: GeneratedCode) => GeneratedCode) => GeneratedCode;
 }
+/**
+ * A generation function and its staleness check. Reading changeset runs the function.
+ */
 declare class Generator extends BaseClient {
     private readonly _id?;
-    private readonly _completed?;
-    private readonly _description?;
-    private readonly _isEmpty?;
-    private readonly _name?;
     /**
      * Constructor is used for internal usage only, do not create object from it.
      */
-    constructor(ctx?: Context, _id?: ID, _completed?: boolean, _description?: string, _isEmpty?: boolean, _name?: string);
+    constructor(ctx?: Context, _id?: ID);
     /**
      * A unique identifier for this Generator.
      */
     id: () => Promise<ID>;
     /**
-     * The generated changeset from the last run
+     * Run the generator and return its changes.
      */
-    changes: () => Changeset;
+    changeset: () => Changeset;
     /**
-     * Whether the generator complete
+     * A check that passes when this generator would produce no changes.
      */
-    completed: () => Promise<boolean>;
+    stale: () => Check;
     /**
-     * Return the description of the generator
+     * Run the generator and retain its result.
      */
-    description: () => Promise<string>;
-    /**
-     * Whether changeset from the last generator run is empty or not
-     */
-    isEmpty: () => Promise<boolean>;
-    /**
-     * Return the fully qualified name of the generator
-     */
-    name: () => Promise<string>;
-    /**
-     * The module that defined the generator, or null for an engine-defined generator
-     */
-    originalModule: () => Promise<Module_ | null>;
-    /**
-     * The path of the generator within its module
-     */
-    path: () => Promise<string[]>;
-    /**
-     * Execute the generator
-     */
-    run: () => Generator;
+    sync: () => Generator;
     /**
      * Call the provided function with current Generator.
      *
      * This is useful for reusability and readability by not breaking the calling chain.
      */
     with: (arg: (param: Generator) => Generator) => Generator;
-}
-declare class GeneratorGroup extends BaseClient {
-    private readonly _id?;
-    private readonly _isEmpty?;
-    /**
-     * Constructor is used for internal usage only, do not create object from it.
-     */
-    constructor(ctx?: Context, _id?: ID, _isEmpty?: boolean);
-    /**
-     * A unique identifier for this GeneratorGroup.
-     */
-    id: () => Promise<ID>;
-    /**
-     * The combined changes from the last run of the generators
-     *
-     * If any conflict occurs, for instance if the same file is modified by multiple generators, or if a file is both modified and deleted, an error is raised and the merge of the changesets will failed.
-     *
-     * Set 'continueOnConflicts' flag to force to merge the changes in a 'last write wins' strategy.
-     * @param opts.onConflict Strategy to apply on conflicts between generators
-     */
-    changes: (opts?: GeneratorGroupChangesOpts) => Changeset;
-    /**
-     * Whether the generated changeset from the last run is empty or not
-     */
-    isEmpty: () => Promise<boolean>;
-    /**
-     * Return a list of individual generators and their details
-     */
-    list: () => Promise<Generator[]>;
-    /**
-     * Load failures tolerated while collecting the generators.
-     *
-     * Empty unless a workspace module could not be loaded during an unscoped 'dagger generate' (no selector), where load failures are tolerated so the modules that do load still generate. Each entry is a human-readable error message. An explicit selector keeps failing hard instead.
-     */
-    loadFailures: () => Promise<string[]>;
-    /**
-     * Execute all selected generators
-     */
-    run: () => GeneratorGroup;
-    /**
-     * The workspace with the combined output from the last generator run
-     * @param opts.onConflict Strategy to apply on conflicts between generators
-     */
-    workspace: (opts?: GeneratorGroupWorkspaceOpts) => Workspace;
-    /**
-     * Call the provided function with current GeneratorGroup.
-     *
-     * This is useful for reusability and readability by not breaking the calling chain.
-     */
-    with: (arg: (param: GeneratorGroup) => GeneratorGroup) => GeneratorGroup;
 }
 /**
  * A Git bundle: a self-describing container of refs and the objects needed to reconstruct them, optionally rooted at prerequisite commits.
@@ -5118,6 +6176,13 @@ declare class GitCommit extends BaseClient {
      */
     authoredDate: () => Promise<string>;
     /**
+     * Returns the changes from the first parent to this commit, excluding Git metadata.
+     *
+     * Root commits are compared with an empty tree. Merge commits are compared with their first parent, not a merge base.
+     * @param opts.against Use this commit as the comparison base instead of the first parent. The comparison commit may belong to an unrelated history or repository.
+     */
+    changes: (opts?: GitCommitChangesOpts) => Changeset;
+    /**
      * Git committer date, in RFC3339 format.
      */
     committedDate: () => Promise<string>;
@@ -5167,6 +6232,40 @@ declare class GitCommit extends BaseClient {
     tree: (opts?: GitCommitTreeOpts) => Directory;
 }
 /**
+ * A receipt for a completed Git push. Reading or replaying the receipt does not push again.
+ */
+declare class GitPushResult extends BaseClient {
+    private readonly _id?;
+    private readonly _disposition?;
+    private readonly _previousSHA?;
+    private readonly _ref?;
+    private readonly _sha?;
+    /**
+     * Constructor is used for internal usage only, do not create object from it.
+     */
+    constructor(ctx?: Context, _id?: ID, _disposition?: GitPushDisposition, _previousSHA?: string, _ref?: string, _sha?: string);
+    /**
+     * A unique identifier for this GitPushResult.
+     */
+    id: () => Promise<ID>;
+    /**
+     * How the remote ref was updated.
+     */
+    disposition: () => Promise<GitPushDisposition>;
+    /**
+     * The previous remote object ID; empty when the ref was created.
+     */
+    previousSHA: () => Promise<string>;
+    /**
+     * The fully qualified remote ref.
+     */
+    ref: () => Promise<string>;
+    /**
+     * The object ID pushed to the remote.
+     */
+    sha: () => Promise<string>;
+}
+/**
  * A git ref (tag, branch, or commit).
  */
 declare class GitRef extends BaseClient {
@@ -5183,6 +6282,12 @@ declare class GitRef extends BaseClient {
      * A unique identifier for this GitRef.
      */
     id: () => Promise<ID>;
+    /**
+     * Return this ref's repository with HEAD pinned to the selected commit.
+     *
+     * Preserves the original repository backend, connection information, and other refs. Does not modify a branch or checkout, or prune history.
+     */
+    asRepository: () => GitRepository;
     /**
      * Creates a synthetic workspace from this git ref.
      * @param opts.cwd Current working directory inside the workspace root. Defaults to the workspace root.
@@ -5214,6 +6319,18 @@ declare class GitRef extends BaseClient {
      */
     name: () => Promise<string>;
     /**
+     * Push this ref's commit and history to a remote repository using the destination's credentials.
+     *
+     * The source can come from a remote repository or an engine-side Git repository. To publish a workspace's commits, use Workspace.git.head.push. Pushing does not modify the calling client's checkout, and checkout hooks do not run.
+     *
+     * A missing remote ref is created. Without a lease, Git's normal non-force rules apply. Each invocation performs a push; loading the returned receipt does not push again.
+     * @param opts.to Destination remote repository. Defaults to the origin remote's push routing, or the source's repository URL when none is registered. Required when the source has no remote URL.
+     * @param opts.remote Name of a registered remote to push to (see GitRepository.withRemote). Defaults to origin. The remote's push URLs, or its URL, become the destination; more than one push URL requires an explicit to instead.
+     * @param opts.branch Destination branch; a refs/ prefix is used verbatim. Defaults to this ref's branch name. Required for detached and non-branch refs.
+     * @param opts.expectedRemoteSHA Optional lease: a full lowercase object ID allows replacement only if the remote ref still has that value. Checked even for up-to-date pushes. Empty or omitted uses normal non-force rules, creating the ref if it does not exist.
+     */
+    push: (opts?: GitRefPushOpts) => GitPushResult;
+    /**
      * The resolved ref name at this ref.
      * @deprecated Use "name" instead.
      */
@@ -5229,6 +6346,24 @@ declare class GitRef extends BaseClient {
      * @param opts.includeTags Set to true to populate tag refs in the local checkout .git.
      */
     tree: (opts?: GitRefTreeOpts) => Directory;
+    /**
+     * Create a single-parent commit on this ref by applying a changeset's edits.
+     *
+     * Three-way merges the changeset against this ref's tree, using its before snapshot as the base. Preserves compatible parent edits and fails on conflicts. Does not modify the input repository or host checkout.
+     *
+     * Identity and dates are explicit; neither client Git configuration nor the current clock is consulted.
+     * @param changes Changes to apply. Use Changeset.filter to select paths before committing.
+     * @param message Commit message.
+     * @param date RFC3339 author date; also the default committer date.
+     * @param authorName Author name.
+     * @param authorEmail Author email.
+     * @param opts.committerName Committer name. Defaults to authorName.
+     * @param opts.committerEmail Committer email. Defaults to authorEmail.
+     * @param opts.committerDate RFC3339 committer date. Defaults to date.
+     * @param opts.allowEmpty Allow a commit whose tree matches its parent, including when the supplied edits are already present. Defaults to false.
+     * @param opts.signoff Add a Signed-off-by trailer using the commit author's name and email.
+     */
+    withCommit: (changes: Changeset, message: string, date: string, authorName: string, authorEmail: string, opts?: GitRefWithCommitOpts) => GitRef;
     /**
      * Call the provided function with current GitRef.
      *
@@ -5251,7 +6386,9 @@ declare class GitRepository extends BaseClient {
      */
     id: () => Promise<ID>;
     /**
-     * Creates a synthetic workspace from this git repository.
+     * Creates a synthetic workspace from this repository's HEAD and uncommitted file changes.
+     *
+     * Pending changes are applied at the repository root. The staging split is not preserved. The source repository is not modified.
      * @param opts.cwd Current working directory inside the workspace root. Defaults to the workspace root.
      */
     asWorkspace: (opts?: GitRepositoryAsWorkspaceOpts) => Workspace;
@@ -5274,6 +6411,8 @@ declare class GitRepository extends BaseClient {
     /**
      * Returns details of a commit.
      * @param id Identifier of the commit (e.g., "b6315d8f2810962c601af73f86831f6866ea798b").
+     *
+     * May be abbreviated to an unambiguous hex prefix (4-40 characters), which is expanded against locally available objects. Remote repositories (resolved via ls-remote) can only expand prefixes of already-fetched commits; use the full SHA otherwise.
      */
     commit: (id: string) => GitCommit;
     /**
@@ -5290,6 +6429,8 @@ declare class GitRepository extends BaseClient {
     /**
      * Returns details of a ref.
      * @param name Ref's name (can be a commit identifier, a tag name, a branch name, or a fully-qualified ref).
+     *
+     * Commit identifiers may be abbreviated: an unambiguous hex prefix (4-40 characters) of a commit SHA resolves like git rev-parse, with named refs taking precedence. Abbreviated SHAs resolve against locally available objects, so remote repositories (resolved via ls-remote) can only expand prefixes of already-fetched commits; use the full SHA or a named ref otherwise.
      */
     ref: (name: string) => GitRef;
     /**
@@ -5316,6 +6457,26 @@ declare class GitRepository extends BaseClient {
      * @param opts.prerequisiteRef An optional remote ref hint for fetching a prerequisite when the remote does not allow fetches by object ID.
      */
     withBundle: (bundle: GitBundle, opts?: GitRepositoryWithBundleOpts) => GitRepository;
+    /**
+     * Replace this repository's storage with the supplied self-contained Git repository, retaining its logical URL and push destinations.
+     *
+     * Accepts a whole checkout (including .git and pending file edits), .git contents, or a bare repository. Does not initialize a repository, merge histories, or modify either input.
+     *
+     * The receiver's logical routing wins over the supplied Git configuration; that configuration is not rewritten. Use Directory.asGit to open the supplied repository without retaining the receiver's routing.
+     * @param directory Existing Git storage to open. Git metadata and object dependencies must be contained in this directory.
+     */
+    withContents: (directory: Directory) => GitRepository;
+    /**
+     * Register a named remote on this repository, replacing any registered remote of the same name.
+     *
+     * Registered remotes are recorded in checkouts materialized from this repository (GitRef.tree, Workspace.git.directory), so remote-aware tooling like gh can resolve and fetch from them. The origin remote also routes push when no explicit destination is passed: its push URL, or its URL, becomes the default destination.
+     *
+     * Routing metadata only, never a credential grant: pushes still authenticate with the caller's own credentials and require approval as usual.
+     * @param name The remote's name, e.g. "origin" or "upstream".
+     * @param url The remote's fetch URL.
+     * @param opts.pushUrl Push destination, when pushes go somewhere other than url. Empty uses url.
+     */
+    withRemote: (name: string, url: string, opts?: GitRepositoryWithRemoteOpts) => GitRepository;
     /**
      * Call the provided function with current GitRepository.
      *
@@ -5603,24 +6764,39 @@ declare class LLM extends BaseClient {
     private readonly _id?;
     private readonly _contextTokens?;
     private readonly _contextWindow?;
+    private readonly _emitHistory?;
     private readonly _hasPending?;
     private readonly _lastReply?;
     private readonly _model?;
     private readonly _portableID?;
     private readonly _provider?;
     private readonly _reasoningEffort?;
-    private readonly _replay?;
+    private readonly _spawn?;
     private readonly _sync?;
     private readonly _tools?;
     private readonly _transcript?;
     /**
      * Constructor is used for internal usage only, do not create object from it.
      */
-    constructor(ctx?: Context, _id?: ID, _contextTokens?: number, _contextWindow?: number, _hasPending?: boolean, _lastReply?: string, _model?: string, _portableID?: ID, _provider?: string, _reasoningEffort?: string, _replay?: ID, _sync?: ID, _tools?: string, _transcript?: string);
+    constructor(ctx?: Context, _id?: ID, _contextTokens?: number, _contextWindow?: number, _emitHistory?: ID, _hasPending?: boolean, _lastReply?: string, _model?: string, _portableID?: ID, _provider?: string, _reasoningEffort?: string, _spawn?: ID, _sync?: ID, _tools?: string, _transcript?: string);
     /**
      * A unique identifier for this LLM.
      */
     id: () => Promise<ID>;
+    /**
+     * Reconstruct a spawned agent from its runtime handle.
+     *
+     * This is the lookup spawn pins its result's identity through: the returned handle's ID is an honest, replayable chain denoting the one instance the spawn minted. It never creates an instance itself.
+     * @param handle The opaque runtime handle minted by the spawn that created the agent.
+     * @param name The agent's display name, as recorded by the spawn.
+     * @experimental
+     */
+    agent: (handle: string, name: string) => Agent;
+    /**
+     * Run expertise in list order, passing this conversation through each function. Retain existing contributions.
+     * @param expertise The expertise to run. Each reference retains its source workspace.
+     */
+    compose: (expertise: Expertise[]) => LLM;
     /**
      * estimated number of tokens currently occupying the context window; unlike tokenUsage this is not cumulative over the session
      */
@@ -5629,6 +6805,10 @@ declare class LLM extends BaseClient {
      * The model's total context window in tokens, or null if unknown (e.g. a local or uncatalogued model).
      */
     contextWindow: () => Promise<number>;
+    /**
+     * Re-emit telemetry spans for the full message history, so a loaded conversation displays in the TUI.
+     */
+    emitHistory: () => Promise<LLM>;
     /**
      * Fork the conversation, so that otherwise-identical follow-ups evaluate independently instead of deduplicating to a single cached result.
      * @param label A label distinguishing this fork from its siblings, e.g. "attempt-2" when retrying a flaky evaluation.
@@ -5669,13 +6849,35 @@ declare class LLM extends BaseClient {
      */
     reasoningEffort: () => Promise<string>;
     /**
-     * Re-emit telemetry spans for the full message history, so a loaded conversation displays in the TUI.
+     * Run expertise in list order, replacing their modules' contributions and preserving compatible tool state.
+     *
+     * Clear each selected module's contributions once before execution. Retain unowned contributions and contributions from other modules. Keep this LLM's workspace.
+     *
+     * A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
+     * @param expertise The expertise to run. Each reference retains its source workspace.
      */
-    replay: () => Promise<LLM>;
+    recompose: (expertise: Expertise[]) => LLM;
     /**
      * The skills visible to the model, exactly as the ListSkills tool serves them: engine-embedded skills, skills installed with withSkills, and skills discovered in the workspace.
      */
     skills: () => Promise<LLMSkill[]>;
+    /**
+     * Spawn the conversation as an agent: a startable, addressable evaluation loop seeded with this conversation's state, tools, and workspace.
+     *
+     * Every spawn mints a unique agent instance — two spawns of an identical conversation are two distinct agents, like two calls to a process spawn. The result is pinned to the instance (via the agent lookup field), so re-loading its ID re-addresses the same agent from any request in the session.
+     *
+     * The loop is not started: the agent spends nothing until it is prompted or resumed, and any input pending on the conversation is stepped then.
+     *
+     * With a handle, spawn restores an instance instead of minting one: this conversation becomes the committed history of the agent that handle names, so prompting it continues where it left off — rebuild a conversation's ID from a trace, load it, and spawn it under the handle it belonged to. Fails if that instance already has a runtime entry in this session: a restore must happen before anything else addresses the instance, since by then it may have stepped.
+     * @param opts.name Display label for the agent — telemetry and error messages; carries no identity. Defaults to a short name derived from the conversation.
+     * @param opts.handle The runtime handle to restore the instance under, as published on its loop span as dagger.io/agent.id. Omit to mint a fresh instance.
+     * @param opts.state The lifecycle state to create the agent in, as facts on the entry: IDLE is ready to be prompted, PAUSED parks it, FAILED holds an error a resume retries past, STOPPED preserves a dormant snapshot that send or resume can relaunch.
+     *
+     * RUNNING and WAITING_INPUT are refused: they describe a loop, and a restored loop died with the session that published it — restore such an agent as IDLE, its interrupted turn's input still pending on the conversation.
+     * @param opts.error The loop error to create the agent with, for state FAILED. Refused with any other state.
+     * @experimental
+     */
+    spawn: (opts?: LLMSpawnOpts) => Promise<ID>;
     /**
      * Advance the conversation by a single step: send the queued prompt or tool results to the model, evaluate any tool calls it makes, and queue their results. Use loop to step until the model ends its turn.
      * @param opts.maxTokens Cap the model's output tokens for this step. Defaults to the model's maximum.
@@ -5698,6 +6900,18 @@ declare class LLM extends BaseClient {
      */
     transcript: () => Promise<string>;
     /**
+     * Queue one user message containing ordered text and media blocks.
+     * @param content The ordered message content.
+     * @param opts.origin The message's recorded provenance.
+     */
+    withContent: (content: LLMContentBlockInput[], opts?: LLMWithContentOpts) => LLM;
+    /**
+     * Queue an image, audio, or PDF file as one user message. Media bytes are stored in the conversation.
+     * @param file The media file.
+     * @param opts.mimeType The media MIME type; inferred from the file's contents when omitted.
+     */
+    withContentFile: (file: File, opts?: LLMWithContentFileOpts) => LLM;
+    /**
      * Add an external MCP server to the LLM
      * @param name The name of the MCP server
      * @param service The MCP service to run and communicate with over stdio
@@ -5712,8 +6926,9 @@ declare class LLM extends BaseClient {
     /**
      * Queue a user prompt, to be sent to the model on the next step or loop.
      * @param prompt The prompt to send
+     * @param opts.origin The message's recorded provenance, when it arrived through an agent mailbox rather than from the user. Rendered to the model as an attribution header at request-build time.
      */
-    withPrompt: (prompt: string) => LLM;
+    withPrompt: (prompt: string, opts?: LLMWithPromptOpts) => LLM;
     /**
      * Queue a file's contents as a user prompt, like withPrompt.
      * @param file The file to read the prompt from
@@ -5740,6 +6955,10 @@ declare class LLM extends BaseClient {
      */
     withSkills: (directory: Directory) => LLM;
     /**
+     * Switch to the configured small model for the current provider, or that provider's recommended default. The message history is preserved; unknown providers without a small-model configuration keep their current model.
+     */
+    withSmallModel: () => LLM;
+    /**
      * Add a system prompt, instructing the model across the whole conversation.
      * @param prompt The system prompt to send
      */
@@ -5747,14 +6966,16 @@ declare class LLM extends BaseClient {
     /**
      * Append the result of a tool call to the message history.
      * @param callId The ID of the tool call this result responds to
-     * @param content The content returned by the tool
+     * @param content Text returned by the tool, placed before blocks
      * @param errored Whether the tool call resulted in an error
+     * @param opts.blocks Ordered text and media returned by the tool
      */
-    withToolResult: (callId: string, content: string, errored: boolean) => LLM;
+    withToolResult: (callId: string, content: string, errored: boolean, opts?: LLMWithToolResultOpts) => LLM;
     /**
      * Expose an object's methods as tools. Every eligible method of the bound object becomes a tool; a tool that returns this object's own type replaces it as the new state. Repeatable to bind several objects.
      * @param object The object whose methods become tools.
      * @param opts.except Method names to exclude from the toolset (e.g. constructors, entrypoints).
+     * @param opts.version Version of this binding's state contract. Recomposition preserves compatible state when the version is unchanged and resets to the newly bound object's defaults when it differs. Change this when the state layout changes incompatibly. Same-type tool returns retain the version. Module identity and ownership checks still apply.
      */
     withTools: (object: Node, opts?: LLMWithToolsOpts) => LLM;
     /**
@@ -5792,15 +7013,17 @@ declare class LLMContentBlock extends BaseClient {
     private readonly _id?;
     private readonly _arguments?;
     private readonly _callId?;
+    private readonly _data?;
     private readonly _errored?;
     private readonly _kind?;
+    private readonly _mimeType?;
     private readonly _signature?;
     private readonly _text?;
     private readonly _toolName?;
     /**
      * Constructor is used for internal usage only, do not create object from it.
      */
-    constructor(ctx?: Context, _id?: ID, _arguments?: JSON, _callId?: string, _errored?: boolean, _kind?: LLMContentBlockKind, _signature?: string, _text?: string, _toolName?: string);
+    constructor(ctx?: Context, _id?: ID, _arguments?: JSON, _callId?: string, _data?: string, _errored?: boolean, _kind?: LLMContentBlockKind, _mimeType?: string, _signature?: string, _text?: string, _toolName?: string);
     /**
      * A unique identifier for this LLMContentBlock.
      */
@@ -5814,6 +7037,14 @@ declare class LLMContentBlock extends BaseClient {
      */
     callId: () => Promise<string>;
     /**
+     * Ordered content returned by a tool, following any text (for TOOL_RESULT kind).
+     */
+    content: () => Promise<LLMContentBlock[]>;
+    /**
+     * Base64-encoded media bytes (for IMAGE, AUDIO, or DOCUMENT kinds).
+     */
+    data: () => Promise<string>;
+    /**
      * Whether the tool call resulted in an error (for TOOL_RESULT kind).
      */
     errored: () => Promise<boolean>;
@@ -5821,6 +7052,10 @@ declare class LLMContentBlock extends BaseClient {
      * The kind of content block, which determines the other populated fields.
      */
     kind: () => Promise<LLMContentBlockKind>;
+    /**
+     * The media MIME type (for IMAGE, AUDIO, or DOCUMENT kinds).
+     */
+    mimeType: () => Promise<string>;
     /**
      * Provider-specific opaque data (e.g. Anthropic thinking signature). Preserve it when reconstructing a conversation.
      */
@@ -5853,6 +7088,13 @@ declare class LLMMessage extends BaseClient {
      */
     content: () => Promise<LLMContentBlock[]>;
     /**
+     * Who put this message on the record, when it arrived through an agent mailbox.
+     *
+     * Null for the user's own prompts and for everything the model or tools produced.
+     * @experimental
+     */
+    origin: () => Promise<LLMMessageOrigin | null>;
+    /**
      * The role that produced this message.
      */
     role: () => Promise<LLMMessageRole>;
@@ -5860,6 +7102,46 @@ declare class LLMMessage extends BaseClient {
      * Token usage reported by the provider for the API call that produced this message; all zeros except on assistant responses.
      */
     tokenUsage: () => LLMTokenUsage;
+}
+/**
+ * EXPERIMENTAL: Agent APIs are likely to change.
+ *
+ * The recorded provenance of a message that arrived through an agent mailbox.
+ */
+declare class LLMMessageOrigin extends BaseClient {
+    private readonly _id?;
+    private readonly _agentName?;
+    private readonly _kind?;
+    private readonly _ref?;
+    private readonly _replyTo?;
+    /**
+     * Constructor is used for internal usage only, do not create object from it.
+     */
+    constructor(ctx?: Context, _id?: ID, _agentName?: string, _kind?: LLMMessageOriginKind, _ref?: string, _replyTo?: string);
+    /**
+     * A unique identifier for this LLMMessageOrigin.
+     */
+    id: () => Promise<ID>;
+    /**
+     * The display name of the sending agent (for AGENT origins) or the observed agent (for EVENT origins).
+     * @experimental
+     */
+    agentName: () => Promise<string>;
+    /**
+     * Who put this message on the record.
+     * @experimental
+     */
+    kind: () => Promise<LLMMessageOriginKind>;
+    /**
+     * The message's short ref within the receiving agent's runtime, e.g. "#3": the deterministic token replies name (send's replyTo) and the message lookup takes.
+     * @experimental
+     */
+    ref: () => Promise<string>;
+    /**
+     * The ref of the message this one answers, in the sender's own runtime, if any.
+     * @experimental
+     */
+    replyTo: () => Promise<string>;
 }
 /**
  * A skill available to a model: task-specific guidance discovered with ListSkills and read with ReadSkill.
@@ -5984,18 +7266,9 @@ declare class Module_ extends BaseClient {
      */
     id: () => Promise<ID>;
     /**
-     * Return the check defined by the module with the given name. Must match to exactly one check.
-     * @param name The name of the check to retrieve
-     * @experimental
+     * The source used to resolve contextual files and directories, when different from source.
      */
-    check: (name: string) => Check;
-    /**
-     * Return all checks defined by the module
-     * @param opts.include Only include checks matching the specified patterns
-     * @param opts.noGenerate When true, only return annotated check functions; exclude generate-as-checks
-     * @experimental
-     */
-    checks: (opts?: ModuleChecksOpts) => CheckGroup;
+    contextSource: () => Promise<ModuleSource | null>;
     /**
      * The dependencies of the module.
      */
@@ -6012,18 +7285,6 @@ declare class Module_ extends BaseClient {
      * The generated files and directories made on top of the module source's context directory.
      */
     generatedContextDirectory: () => Directory;
-    /**
-     * Return the generator defined by the module with the given name. Must match to exactly one generator.
-     * @param name The name of the generator to retrieve
-     * @experimental
-     */
-    generator: (name: string) => Generator;
-    /**
-     * Return all generators defined by the module
-     * @param opts.include Only include generators matching the specified patterns
-     * @experimental
-     */
-    generators: (opts?: ModuleGeneratorsOpts) => GeneratorGroup;
     /**
      * Interfaces served by this module.
      */
@@ -6060,12 +7321,6 @@ declare class Module_ extends BaseClient {
      * @param opts.entrypoint Install the module as the entrypoint, promoting its main-object methods onto the Query root
      */
     serve: (opts?: ModuleServeOpts) => Promise<void>;
-    /**
-     * Return all services defined by the module
-     * @param opts.include Only include services matching the specified patterns
-     * @experimental
-     */
-    services: (opts?: ModuleServicesOpts) => UpGroup;
     /**
      * The source for the module.
      */
@@ -6518,12 +7773,14 @@ declare class Port extends BaseClient {
  */
 declare class Client extends BaseClient {
     private readonly _id?;
+    private readonly _currentTimestamp?;
     private readonly _defaultPlatform?;
+    private readonly _serveModule?;
     private readonly _version?;
     /**
      * Constructor is used for internal usage only, do not create object from it.
      */
-    constructor(ctx?: Context, _id?: ID, _defaultPlatform?: Platform, _version?: string);
+    constructor(ctx?: Context, _id?: ID, _currentTimestamp?: string, _defaultPlatform?: Platform, _serveModule?: Void, _version?: string);
     /**
      * Get the Raw GraphQL client.
      */
@@ -6533,7 +7790,7 @@ declare class Client extends BaseClient {
      */
     id: () => Promise<ID>;
     /**
-     * initialize an address to load directories, containers, secrets or other object types.
+     * Resolve external references only.
      */
     address: (value: string) => Address;
     /**
@@ -6584,6 +7841,10 @@ declare class Client extends BaseClient {
      * The object that received the current module function call, as a Node. Errors when there is no current call, or the call is top-level (e.g. a module constructor).
      */
     currentNode: () => Node;
+    /**
+     * The current UTC time in RFC3339 format. Never cached.
+     */
+    currentTimestamp: () => Promise<string>;
     /**
      * The TypeDef representations of the objects currently being served in the session.
      * @param opts.returnAllTypes Return the full referenced typedef closure instead of only top-level served typedefs.
@@ -6716,6 +7977,18 @@ declare class Client extends BaseClient {
      * If not set, the cache key for the secret will be derived from its plaintext value as looked up when the secret is constructed.
      */
     secret: (uri: string, opts?: ClientSecretOpts) => Secret;
+    /**
+     * Load the module at the given address and serve its API in the current session.
+     *
+     * A local address resolves against the caller's workspace, so a generated client can serve the module it is bound to without reaching for the workspace itself.
+     * @param address A module address, or an explicit path into the caller's workspace.
+     *
+     * Absolute paths (e.g. "/.dagger/modules/hello") resolve from the workspace root, relative ones (e.g. "./hello") from the workspace cwd.
+     *
+     * Installed module names are not accepted.
+     * @param opts.refPin The pinned version of a remote module address.
+     */
+    serveModule: (address: string, opts?: ClientServeModuleOpts) => Promise<void>;
     /**
      * Sets a secret given a user defined name to its plaintext and returns the secret.
      *
@@ -6973,8 +8246,9 @@ declare class Service extends BaseClient {
     hostname: () => Promise<string>;
     /**
      * Retrieves the list of ports provided by the service.
+     * @param opts.declared Return only container ports declared before startup. Other service types return an empty list.
      */
-    ports: () => Promise<Port[]>;
+    ports: (opts?: ServicePortsOpts) => Promise<Port[]>;
     /**
      * Start the service and wait for its health checks to succeed.
      *
@@ -7138,60 +8412,6 @@ declare class Terminal extends BaseClient {
      */
     sync: () => Promise<Terminal>;
 }
-declare class TerminalGroup extends BaseClient {
-    private readonly _id?;
-    /**
-     * Constructor is used for internal usage only, do not create object from it.
-     */
-    constructor(ctx?: Context, _id?: ID);
-    /**
-     * A unique identifier for this TerminalGroup.
-     */
-    id: () => Promise<ID>;
-    /**
-     * Return the selected terminal targets and their details
-     */
-    list: () => Promise<TerminalTarget[]>;
-    /**
-     * Open the selected terminal target
-     */
-    run: () => TerminalGroup;
-    /**
-     * Call the provided function with current TerminalGroup.
-     *
-     * This is useful for reusability and readability by not breaking the calling chain.
-     */
-    with: (arg: (param: TerminalGroup) => TerminalGroup) => TerminalGroup;
-}
-declare class TerminalTarget extends BaseClient {
-    private readonly _id?;
-    private readonly _description?;
-    private readonly _name?;
-    /**
-     * Constructor is used for internal usage only, do not create object from it.
-     */
-    constructor(ctx?: Context, _id?: ID, _description?: string, _name?: string);
-    /**
-     * A unique identifier for this TerminalTarget.
-     */
-    id: () => Promise<ID>;
-    /**
-     * The description of the terminal target
-     */
-    description: () => Promise<string>;
-    /**
-     * Return the fully qualified name of the terminal target
-     */
-    name: () => Promise<string>;
-    /**
-     * The module in which the terminal target is defined
-     */
-    originalModule: () => Module_;
-    /**
-     * The path of the terminal target within its module
-     */
-    path: () => Promise<string[]>;
-}
 /**
  * A definition of a parameter or return type in a Module.
  */
@@ -7208,6 +8428,10 @@ declare class TypeDef extends BaseClient {
      * A unique identifier for this TypeDef.
      */
     id: () => Promise<ID>;
+    /**
+     * Collection metadata, or null if this object is not a collection.
+     */
+    asCollection: () => Promise<CollectionTypeDef | null>;
     /**
      * If kind is ENUM, the enum-specific type definition. If kind is not ENUM, this will be null.
      */
@@ -7244,6 +8468,22 @@ declare class TypeDef extends BaseClient {
      * Whether this type can be set to null. Defaults to false.
      */
     optional: () => Promise<boolean>;
+    /**
+     * Mark this object as a collection.
+     */
+    withCollection: () => TypeDef;
+    /**
+     * Select the field that receives changes from the original collection.
+     */
+    withCollectionDelta: (name: string) => TypeDef;
+    /**
+     * Select the item lookup function for this collection.
+     */
+    withCollectionGet: (name: string) => TypeDef;
+    /**
+     * Select the stored keys field for this collection.
+     */
+    withCollectionKeys: (name: string) => TypeDef;
     /**
      * Adds a function for constructing a new instance of an Object TypeDef, failing if the type is not an object.
      */
@@ -7321,70 +8561,6 @@ declare class TypeDef extends BaseClient {
      */
     with: (arg: (param: TypeDef) => TypeDef) => TypeDef;
 }
-declare class Up extends BaseClient {
-    private readonly _id?;
-    private readonly _description?;
-    private readonly _name?;
-    /**
-     * Constructor is used for internal usage only, do not create object from it.
-     */
-    constructor(ctx?: Context, _id?: ID, _description?: string, _name?: string);
-    /**
-     * A unique identifier for this Up.
-     */
-    id: () => Promise<ID>;
-    /**
-     * The description of the service
-     */
-    description: () => Promise<string>;
-    /**
-     * Return the fully qualified name of the service
-     */
-    name: () => Promise<string>;
-    /**
-     * The original module in which the service has been defined
-     */
-    originalModule: () => Module_;
-    /**
-     * The path of the service within its module
-     */
-    path: () => Promise<string[]>;
-    /**
-     * Execute the service function
-     */
-    run: () => Up;
-    /**
-     * Call the provided function with current Up.
-     *
-     * This is useful for reusability and readability by not breaking the calling chain.
-     */
-    with: (arg: (param: Up) => Up) => Up;
-}
-declare class UpGroup extends BaseClient {
-    private readonly _id?;
-    /**
-     * Constructor is used for internal usage only, do not create object from it.
-     */
-    constructor(ctx?: Context, _id?: ID);
-    /**
-     * A unique identifier for this UpGroup.
-     */
-    id: () => Promise<ID>;
-    /**
-     * Return a list of individual services and their details
-     */
-    list: () => Promise<Up[]>;
-    /**
-     * Execute all selected service functions
-     */
-    run: () => UpGroup;
-    /**
-     * Call the provided function with current UpGroup.
-     *
-     * This is useful for reusability and readability by not breaking the calling chain.
-     */
-    with: (arg: (param: UpGroup) => UpGroup) => UpGroup;
-}
 /**
  * A filesystem volume that can be mounted into containers.
  */
@@ -7409,12 +8585,13 @@ declare class Workspace extends BaseClient {
     private readonly _configRead?;
     private readonly _cwd?;
     private readonly _detectScope?;
+    private readonly _entrypoint?;
     private readonly _export?;
     private readonly _findUp?;
     /**
      * Constructor is used for internal usage only, do not create object from it.
      */
-    constructor(ctx?: Context, _id?: ID, _address?: string, _configFile?: string, _configRead?: string, _cwd?: string, _detectScope?: string, _export?: Void, _findUp?: string);
+    constructor(ctx?: Context, _id?: ID, _address?: string, _configFile?: string, _configRead?: string, _cwd?: string, _detectScope?: string, _entrypoint?: string, _export?: Void, _findUp?: string);
     /**
      * A unique identifier for this Workspace.
      */
@@ -7424,10 +8601,10 @@ declare class Workspace extends BaseClient {
      */
     address: () => Promise<string>;
     /**
-     * Return all agent middlewares from modules loaded in the workspace.
-     * @param opts.include Only include agents matching the specified patterns
+     * Discover static object artifacts from workspace modules without evaluating their values.
+     * @param opts.include Only include artifacts matching these path patterns, as with checks and services. A path selects that path and its children.
      */
-    agents: (opts?: WorkspaceAgentsOpts) => AgentGroup;
+    artifacts: (opts?: WorkspaceArtifactsOpts) => Artifacts;
     /**
      * Return this workspace's changes, with paths relative to its working directory.
      *
@@ -7436,13 +8613,16 @@ declare class Workspace extends BaseClient {
      */
     changes: (opts?: WorkspaceChangesOpts) => Changeset;
     /**
-     * Return all checks from modules loaded in the workspace.
-     * @param opts.include Only include checks matching the specified patterns
-     * @param opts.skip Skip checks matching the specified patterns
-     * @param opts.noGenerate When true, only return annotated check functions; exclude generate-as-checks
-     * @param opts.onlyGenerate When true, only return generate-as-checks; exclude annotated check functions
+     * Preview which source commits withCommitsFrom would apply, skip, or report as conflicting.
+     *
+     * Results are ordered oldest first and account for earlier applicable commits in the same preview. The preview does not apply commits or write to the checkout.
+     *
+     * A local receiver is snapshotted automatically; untracked files require interactive approval. Source uncommitted changes are ignored. Exceeding maxCommits fails rather than returning a partial preview. Divergent merge commits require manual integration.
+     * @param source Git-backed source workspace. For a local checkout, call snapshot on the source first and pass the returned workspace.
+     * @param opts.commits Full lowercase commit hashes or unambiguous lowercase hex prefixes (4-40 characters) to select, in any order. Prefixes resolve against the frozen source's Git objects and are recorded as full hashes; duplicate selections after resolution are rejected. Empty selects all new source commits. Selected commits must be within the source's latest 10000 commits.
+     * @param opts.maxCommits Maximum commits in either differing history, from 1 to 1000. Exceeding the limit fails; nothing is silently omitted.
      */
-    checks: (opts?: WorkspaceChecksOpts) => CheckGroup;
+    compareCommitsFrom: (source: Workspace, opts?: WorkspaceCompareCommitsFromOpts) => Promise<WorkspaceCommitPick[]>;
     /**
      * Selected native workspace config file relative to the workspace cwd, if any.
      */
@@ -7456,6 +8636,7 @@ declare class Workspace extends BaseClient {
      *
      * If key points to a table, returns flattened dotted-key output.
      * @param opts.key Dotted key path (e.g. modules.greeter.source). Empty for full config.
+     * @param opts.effective Include the selected environment, user overrides, and legacy workspace settings.
      */
     configRead: (opts?: WorkspaceConfigReadOpts) => Promise<string>;
     /**
@@ -7482,15 +8663,27 @@ declare class Workspace extends BaseClient {
      */
     directory: (path: string, opts?: WorkspaceDirectoryOpts) => Directory;
     /**
+     * Installed name of the module selected as the workspace entrypoint, or an empty string when none is selected.
+     *
+     * Reflects the selected env's effective view. Fails if several modules are selected.
+     */
+    entrypoint: () => Promise<string>;
+    /**
      * List named environments defined in the workspace configuration.
      */
     envList: () => Promise<string[]>;
     /**
-     * Write this workspace's pending changes to its local Git workspace on the current client's host.
+     * Write this workspace's commits and pending changes to a checkout on the calling client.
      *
-     * Like Directory.export, the write is a side effect on the client that makes the call — never on the client that created the workspace. Inside a module, this cannot reach the caller's host.
+     * Path selects the destination; omitting it uses the calling client's current local workspace root, including when exporting a snapshot or committed workspace. Exported file paths are relative to the workspace root regardless of its working directory. This writes only to the client making the call, never the source's client.
+     *
+     * A live workspace exported to its own checkout applies only its overlay edits, without capturing the whole checkout. This also applies with an explicit path. Pass from with the same live base to apply only changes since that overlay state.
+     *
+     * Other exports integrate divergent commits by cherry-picking, preserve unrelated checkout edits, and refuse conflicts. Live inputs are snapshotted automatically; capturing untracked source files requires interactive approval. Stable inputs retain their baseline. Pass from to save only work since an earlier source value, including previously saved pending edits that are now committed.
+     * @param opts.path Destination checkout path on the calling client. Relative paths start at the client's working directory. Omit to use the calling client's current local workspace root.
+     * @param opts.from Earlier workspace state to compare against. For Git integration, live inputs are snapshotted at export time; use a snapshot to retain the baseline of a previous export.
      */
-    export: () => Promise<void>;
+    export: (opts?: WorkspaceExportOpts) => Promise<void>;
     /**
      * Returns a File from the workspace.
      *
@@ -7522,11 +8715,6 @@ declare class Workspace extends BaseClient {
      */
     findUp: (name: string, opts?: WorkspaceFindUpOpts) => Promise<string>;
     /**
-     * Return all generators from modules loaded in the workspace.
-     * @param opts.include Only include generators matching the specified patterns
-     */
-    generators: (opts?: WorkspaceGeneratorsOpts) => GeneratorGroup;
-    /**
      * Git state for this workspace. Errors if the workspace is not in a git repository.
      */
     git: () => WorkspaceGit;
@@ -7540,9 +8728,19 @@ declare class Workspace extends BaseClient {
     /**
      * Plan the explicit migration needed for the current workspace.
      *
+     * Include installed local modules and their local dependencies. Other module candidates remain unchanged unless selected.
+     *
      * The returned plan has an empty changeset and no steps when no migration is needed.
+     * @param opts.modules Additional local modules to migrate. Relative paths start at the workspace cwd; absolute paths start at the workspace root.
      */
-    migrate: () => WorkspaceMigration;
+    migrate: (opts?: WorkspaceMigrateOpts) => WorkspaceMigration;
+    /**
+     * Plan migration of one local module without migrating its dependencies or creating a workspace configuration.
+     *
+     * Include SDK registration when a workspace configuration exists and remove obsolete generated-file ignore rules.
+     * @param opts.path Module directory. Relative paths start at the workspace cwd; absolute paths start at the workspace root.
+     */
+    migrateModule: (opts?: WorkspaceMigrateModuleOpts) => WorkspaceMigration;
     /**
      * Return a module defined in the workspace configuration.
      *
@@ -7566,9 +8764,16 @@ declare class Workspace extends BaseClient {
      */
     modules: () => Promise<WorkspaceModule[]>;
     /**
-     * Return this workspace with its cached host reads invalidated, so subsequent file and directory reads re-read the live host instead of a snapshot cached earlier in the session.
+     * Resolve an address in this workspace.
+     *
+     * A DAG address (dag://<path>) selects exactly one workspace artifact: artifacts.filterUri(value).one(). Its typed loaders use that artifact and never fall back to external resolution.
+     *
+     * A value without the dag:// scheme keeps its external meaning, such as a container image reference.
+     *
+     * The Address retains this workspace across module calls and ID reloads.
+     * @param value A DAG address, or an external reference.
      */
-    reloaded: () => Workspace;
+    resolve: (value: string) => Address;
     /**
      * An installed SDK, by name.
      * @param name SDK name to look up.
@@ -7598,15 +8803,18 @@ declare class Workspace extends BaseClient {
      */
     search: (opts?: WorkspaceSearchOpts) => Promise<SearchResult[]>;
     /**
-     * Return all services from modules loaded in the workspace.
-     * @param opts.include Only include services matching the specified patterns
+     * Return a snapshot of this workspace as a stable value.
+     *
+     * Git capture is a progressive enhancement: if the workspace has no Git repository or commits, or the client cannot capture Git, return this workspace unchanged. Approval rejections and capture failures remain errors.
+     *
+     * Use the returned workspace for subsequent reads, edits, and module loading against the captured baseline. Snapshotting an existing stable value preserves its baseline; snapshot currentWorkspace again to capture later checkout changes.
+     *
+     * Only the owning client can capture a local checkout. Tracked changes are captured automatically; untracked files require interactive approval. Remote Git refs are pinned to their resolved commits. Capturing leaves the checkout unchanged.
+     *
+     * The recipe is portable when a remote can serve its base; otherwise it is frozen for this session only.
+     * @experimental
      */
-    services: (opts?: WorkspaceServicesOpts) => UpGroup;
-    /**
-     * Return all terminal targets from modules loaded in the workspace.
-     * @param opts.include Only include terminal targets matching the specified patterns
-     */
-    terminals: (opts?: WorkspaceTerminalsOpts) => TerminalGroup;
+    snapshot: () => Workspace;
     /**
      * Return this workspace with a changeset applied, without mutating the source.
      * @param changes Changes to apply.
@@ -7622,11 +8830,51 @@ declare class Workspace extends BaseClient {
      */
     withClient: (module_: string, opts?: WorkspaceWithClientOpts) => Workspace;
     /**
+     * Create a Git commit from a changeset and return a stable workspace with HEAD advanced.
+     *
+     * The changeset is three-way merged into both HEAD and the frozen working tree. Compatible unselected edits remain uncommitted; incoming changes need not already be in the working tree. Conflicts with either tree fail without modifying the workspace. Empty changesets, or changes already present in HEAD, fail with nothing to commit.
+     *
+     * A local workspace is snapshotted automatically before committing; untracked files require interactive approval. The host checkout is not modified.
+     *
+     * Missing author fields are resolved from Git config in the calling client's working directory at commit time, then recorded explicitly for reproducible commits. Unconfigured fields default to Dagger and dagger@localhost.
+     * @param changes Changeset to commit, for example git.uncommitted.filter(...). Paths are rooted at the repository; rename sides are determined by the changeset. Git metadata (.git) is ignored; metadata-only changes fail with nothing to commit.
+     * @param message Commit message.
+     * @param date RFC3339 author and committer date. Required for reproducible commits.
+     * @param opts.authorName Author and committer name. Defaults to git config user.name in the calling client's working directory, otherwise Dagger.
+     * @param opts.authorEmail Author and committer email. Defaults to git config user.email in the calling client's working directory, otherwise dagger@localhost.
+     * @param opts.signoff Add a Signed-off-by trailer using the commit author's name and email.
+     */
+    withCommit: (changes: Changeset, message: string, date: string, opts?: WorkspaceWithCommitOpts) => Workspace;
+    /**
+     * Integrate source commits into this workspace and return the result, preserving this workspace's uncommitted changes and metadata.
+     *
+     * Fast-forward when the selected commits include all new ancestors of their tip; otherwise cherry-pick them oldest first. Already integrated commits and patches already present are skipped. Any conflict fails the operation. Source uncommitted changes are not transferred; merge them explicitly if needed. Use compareCommitsFrom to preview the integration.
+     *
+     * A local receiver is snapshotted automatically; untracked files require interactive approval. The checkout is not modified. Export the result with an explicit path to write it to a checkout.
+     *
+     * Cherry-picks preserve the source author and author date, use the calling client's Git config for committer identity, and reuse the source committer date for reproducible hashes. Origin trailers track cherry-picked commits. Divergent merge commits require manual integration.
+     * @param source Git-backed source workspace. For a local checkout, call snapshot on the source first and pass the returned workspace.
+     * @param opts.commits Full lowercase commit hashes or unambiguous lowercase hex prefixes (4-40 characters) to select, in any order. Prefixes resolve against the frozen source's Git objects and are recorded as full hashes; duplicate selections after resolution are rejected. Empty selects all new source commits. Selected commits must be within the source's latest 10000 commits.
+     * @param opts.maxCommits Maximum commits in either differing history, from 1 to 1000. Exceeding the limit fails; nothing is silently omitted.
+     */
+    withCommitsFrom: (source: Workspace, opts?: WorkspaceWithCommitsFromOpts) => Workspace;
+    /**
      * Return this workspace with a named config environment created.
      * @param name Environment name.
      * @param opts.here Write to the workspace config directory at the workspace cwd.
      */
     withConfigEnv: (name: string, opts?: WorkspaceWithConfigEnvOpts) => Workspace;
+    /**
+     * Select the config environment carried by this workspace.
+     * @param name Environment name, or empty to clear the selection.
+     */
+    withConfigEnvironment: (name: string) => Workspace;
+    /**
+     * Select workspace-root-relative config and lockfile paths. Empty paths clear the selection.
+     * @param configFile Config file path.
+     * @param lockFile Lockfile path.
+     */
+    withConfigPaths: (configFile: string, lockFile: string) => Workspace;
     /**
      * Return this workspace with a configuration value written.
      *
@@ -7646,6 +8894,13 @@ declare class Workspace extends BaseClient {
      */
     withDirectory: (path: string, source: Directory) => Workspace;
     /**
+     * Return this workspace with an installed module selected as its entrypoint.
+     *
+     * Every other entrypoint selection is cleared. Entrypoints live in the base workspace config.
+     * @param name Exact installed module name.
+     */
+    withEntrypoint: (name: string) => Workspace;
+    /**
      * Return this workspace with a file added or replaced, without mutating the source.
      * @param path Destination path. Relative paths resolve from the workspace cwd.
      * @param source File to add.
@@ -7659,9 +8914,17 @@ declare class Workspace extends BaseClient {
      * @param sdk Workspace SDK name or module entry name to use. Required.
      * @param opts.name Module name. The engine infers it from path, the active config file, or the workspace root when omitted.
      * @param opts.path Module path relative to the workspace cwd, or an absolute workspace path. Defaults to .dagger/modules/<name> beside the active workspace config.
+     * @param opts.install Install the module. When omitted, install only if path is omitted.
+     * @param opts.entrypoint Select this module as the entrypoint and install it. False prevents automatic selection. When omitted, select only if both path and name are omitted and the module is installed.
      * @param opts.settings Explicit SDK-module constructor setting overrides for this scope.
      */
     withInitModule: (sdk: string, opts?: WorkspaceWithInitModuleOpts) => Workspace;
+    /**
+     * Return this workspace with a native configuration, without changing an existing configuration.
+     *
+     * Fail if legacy configuration needs workspace migration.
+     */
+    withInitialized: () => Workspace;
     /**
      * Return this workspace with a module installed in its config.
      *
@@ -7703,6 +8966,18 @@ declare class Workspace extends BaseClient {
      */
     withNewFile: (path: string, contents: string, opts?: WorkspaceWithNewFileOpts) => Workspace;
     /**
+     * Move this workspace's Git HEAD to a commit and return the resulting stable workspace.
+     *
+     * A local workspace is snapshotted automatically before resetting; untracked files require interactive approval. The host checkout is not modified. By default the difference between the previous working tree and the target commit stays uncommitted, as with git reset --mixed, so history can be reworked and reapplied with withCommit — e.g. to amend the latest commit message, reset to its parent and commit again.
+     *
+     * With hard, the working tree is reset to the commit and every uncommitted change is discarded.
+     *
+     * Commits orphaned by the reset are not preserved: the frozen repository keeps reachable history only, so a reset cannot be undone by resetting forward again.
+     * @param commit Full commit hash to reset HEAD to.
+     * @param opts.hard Discard uncommitted changes, resetting the working tree to the commit.
+     */
+    withReset: (commit: string, opts?: WorkspaceWithResetOpts) => Workspace;
+    /**
      * Return this workspace with an SDK installed in its config.
      * @param ref SDK module reference to install.
      * @param opts.name Override name for the installed SDK entry.
@@ -7729,10 +9004,11 @@ declare class Workspace extends BaseClient {
      */
     withUpdatedLock: (opts?: WorkspaceWithUpdatedLockOpts) => Workspace;
     /**
-     * Return this workspace with refreshed lockfile state for installed modules.
+     * Return this workspace with updated module versions and lockfile state.
      *
      * An SDK client scope is regenerated when it targets an updated module.
-     * @param opts.names Installed module names to refresh. An empty list refreshes all installed modules.
+     * @param opts.names Installed module names or sources. A version suffix sets a new request. An empty list refreshes all installed modules.
+     * @param opts.version New version request for exactly one selected module. Cannot be combined with a version suffix.
      */
     withUpdatedModules: (opts?: WorkspaceWithUpdatedModulesOpts) => Workspace;
     /**
@@ -7772,6 +9048,10 @@ declare class Workspace extends BaseClient {
      */
     withoutDirectory: (path: string) => Workspace;
     /**
+     * Return this workspace with no module selected as its entrypoint.
+     */
+    withoutEntrypoint: () => Workspace;
+    /**
      * Return this workspace with a file removed, without mutating the source.
      * @param path Path of the file to remove. Relative paths resolve from the workspace cwd.
      */
@@ -7780,10 +9060,17 @@ declare class Workspace extends BaseClient {
      * Return this workspace with a module removed from its config.
      *
      * When the session selects an env, only that env's overlay entry is removed.
-     * @param name Name of the installed module entry to remove.
+     * @param name Installed module name or source to remove. Version selectors are not accepted.
      * @param opts.here Write to the workspace config directory at the workspace cwd.
      */
     withoutModule: (name: string, opts?: WorkspaceWithoutModuleOpts) => Workspace;
+    /**
+     * Return this workspace with the content mounted at the given path unmounted.
+     *
+     * Removes directory and file mounts at or below the path, revealing the underlying workspace content. Other mounts and pending changes are preserved.
+     * @param path Location of the mount to remove. Relative paths resolve from the workspace cwd. Use / to remove all mounts.
+     */
+    withoutMount: (path: string) => Workspace;
     /**
      * Return this workspace with an SDK removed from its config.
      * @param name Name of the installed SDK entry to remove.
@@ -7796,6 +9083,38 @@ declare class Workspace extends BaseClient {
      * This is useful for reusability and readability by not breaking the calling chain.
      */
     with: (arg: (param: Workspace) => Workspace) => Workspace;
+}
+/**
+ * A source commit classified against the receiving workspace.
+ */
+declare class WorkspaceCommitPick extends BaseClient {
+    private readonly _id?;
+    private readonly _reason?;
+    private readonly _status?;
+    /**
+     * Constructor is used for internal usage only, do not create object from it.
+     */
+    constructor(ctx?: Context, _id?: ID, _reason?: WorkspaceCommitPickReason, _status?: WorkspaceCommitPickStatus);
+    /**
+     * A unique identifier for this WorkspaceCommitPick.
+     */
+    id: () => Promise<ID>;
+    /**
+     * The commit in the source workspace.
+     */
+    commit: () => GitCommit;
+    /**
+     * Workspace-root-relative conflicting paths. Empty unless the status is CONFLICT.
+     */
+    conflictPaths: () => Promise<string[]>;
+    /**
+     * Why the commit conflicts, or NONE.
+     */
+    reason: () => Promise<WorkspaceCommitPickReason>;
+    /**
+     * Whether this commit can be applied.
+     */
+    status: () => Promise<WorkspaceCommitPickStatus>;
 }
 /**
  * Local git state for a workspace.
@@ -7811,6 +9130,14 @@ declare class WorkspaceGit extends BaseClient {
      */
     id: () => Promise<ID>;
     /**
+     * Return a self-contained Git metadata directory for this workspace's HEAD, including its full reachable history and an index matching HEAD.
+     *
+     * Mount this directory at .git alongside workspace.directory("/") to create a usable checkout. Pending workspace edits remain uncommitted; the original checkout's staging state is not preserved.
+     *
+     * This is a snapshot: Git writes to a mounted copy do not update the workspace. The workspace must have a Git repository with a HEAD commit.
+     */
+    directory: () => Directory;
+    /**
      * The checked-out HEAD of this workspace.
      */
     head: () => GitRef;
@@ -7824,10 +9151,11 @@ declare class WorkspaceGit extends BaseClient {
  */
 declare class WorkspaceMigration extends BaseClient {
     private readonly _id?;
+    private readonly _configFile?;
     /**
      * Constructor is used for internal usage only, do not create object from it.
      */
-    constructor(ctx?: Context, _id?: ID);
+    constructor(ctx?: Context, _id?: ID, _configFile?: string);
     /**
      * A unique identifier for this WorkspaceMigration.
      */
@@ -7836,6 +9164,14 @@ declare class WorkspaceMigration extends BaseClient {
      * Filesystem changes for the full migration plan.
      */
     changes: () => Changeset;
+    /**
+     * Native workspace config path after migration, relative to the workspace root. Empty if no workspace config exists.
+     */
+    configFile: () => Promise<string>;
+    /**
+     * Unselected legacy module directories relative to the workspace root. Candidates can include fixtures.
+     */
+    moduleCandidates: () => Promise<string[]>;
     /**
      * Logical migration steps, each identified by a stable code.
      */
@@ -7915,19 +9251,25 @@ declare class WorkspaceModule extends BaseClient {
  */
 declare class WorkspaceModuleSetting extends BaseClient {
     private readonly _id?;
+    private readonly _defaultValue?;
     private readonly _description?;
     private readonly _isList?;
     private readonly _isObject?;
+    private readonly _isString?;
     private readonly _key?;
     private readonly _value?;
     /**
      * Constructor is used for internal usage only, do not create object from it.
      */
-    constructor(ctx?: Context, _id?: ID, _description?: string, _isList?: boolean, _isObject?: boolean, _key?: string, _value?: string);
+    constructor(ctx?: Context, _id?: ID, _defaultValue?: string, _description?: string, _isList?: boolean, _isObject?: boolean, _isString?: boolean, _key?: string, _value?: string);
     /**
      * A unique identifier for this WorkspaceModuleSetting.
      */
     id: () => Promise<ID>;
+    /**
+     * The constructor argument's declared default, formatted like value, or empty when the argument has no default.
+     */
+    defaultValue: () => Promise<string>;
     /**
      * The constructor argument description.
      */
@@ -7941,11 +9283,15 @@ declare class WorkspaceModuleSetting extends BaseClient {
      */
     isObject: () => Promise<boolean>;
     /**
+     * Whether the setting is a string argument, stored as a TOML string even when the value reads as a number or boolean.
+     */
+    isString: () => Promise<boolean>;
+    /**
      * The setting key.
      */
     key: () => Promise<string>;
     /**
-     * The configured value after applying the selected workspace environment, or empty when unset.
+     * The value stored in workspace config after applying the selected workspace environment, or empty when unset.
      */
     value: () => Promise<string>;
 }
@@ -7968,6 +9314,10 @@ declare class WorkspaceSDK extends BaseClient {
      * Clients generated with this SDK.
      */
     clients: () => Promise<WorkspaceModule[]>;
+    /**
+     * Generate the modules and clients managed by this SDK.
+     */
+    generate: () => Changeset;
     /**
      * Modules authored with this SDK.
      */
@@ -8380,6 +9730,14 @@ declare function getRegisteredClass(name: string): Class | undefined;
  *
  */
 declare const object: () => (<T extends Class>(constructor: T) => T);
+/** Declare a collection object. */
+declare const collection: () => (<T extends Class>(constructor: T) => T);
+/** Select the stored keys field. */
+declare const keys: () => PropertyDecorator;
+/** Select the item lookup method. */
+declare const get: () => MethodDecorator;
+/** Select the field that receives the collection delta. */
+declare const delta: () => PropertyDecorator;
 /**
  * The definition of @func decorator that should be on top of any
  * class' method that must be exposed to the Dagger API.
@@ -8444,5 +9802,5 @@ declare const enumType: () => (<T extends Class>(constructor: T) => T);
  */
 declare const argument: (opts?: ArgumentOptions) => ((target: object, propertyKey: string | undefined, parameterIndex: number) => void);
 
-export { Address, Agent, AgentGroup, BaseClient, CacheSharingMode, CacheSharingModeNameToValue, CacheSharingModeValueToName, CacheVolume, Changeset, ChangesetMergeConflict, ChangesetMergeConflictNameToValue, ChangesetMergeConflictValueToName, ChangesetsMergeConflict, ChangesetsMergeConflictNameToValue, ChangesetsMergeConflictValueToName, Check, CheckGroup, Client, ClientFilesyncMirror, Cloud, Container, Context, CurrentModule, DaggerSDKError, DiffStat, DiffStatKind, DiffStatKindNameToValue, DiffStatKindValueToName, Directory, DockerImageRefValidationError, ERROR_CODES, Engine, EngineCache, EngineCacheEntry, EngineCacheEntrySet, EngineSessionConnectParamsParseError, EngineSessionConnectionTimeoutError, EngineSessionError, EnumTypeDef, EnumValueTypeDef, EnvFile, EnvVariable, Error$1 as Error, ErrorValue, ExecError, ExistsType, ExistsTypeNameToValue, ExistsTypeValueToName, FieldTypeDef, File, FileType, FileTypeNameToValue, FileTypeValueToName, FunctionArg, FunctionCachePolicy, FunctionCachePolicyNameToValue, FunctionCachePolicyValueToName, FunctionCall, FunctionCallArgValue, FunctionNotFound, Function_, GeneratedCode, Generator, GeneratorGroup, GitBundle, GitBundleRef, GitCommit, GitRef, GitRepository, GraphQLRequestError, HTTPState, HealthcheckConfig, Host, ImageLayerCompression, ImageLayerCompressionNameToValue, ImageLayerCompressionValueToName, ImageMediaTypes, ImageMediaTypesNameToValue, ImageMediaTypesValueToName, InitEngineSessionBinaryError, InputTypeDef, InterfaceTypeDef, IntrospectionError, JSONValue, LLM, LLMContentBlock, LLMContentBlockKind, LLMContentBlockKindNameToValue, LLMContentBlockKindValueToName, LLMMessage, LLMMessageRole, LLMMessageRoleNameToValue, LLMMessageRoleValueToName, LLMSkill, LLMTokenUsage, Label, ListTypeDef, ModuleConfigClient, ModuleSource, ModuleSourceExperimentalFeature, ModuleSourceExperimentalFeatureNameToValue, ModuleSourceExperimentalFeatureValueToName, ModuleSourceKind, ModuleSourceKindNameToValue, ModuleSourceKindValueToName, Module_, NetworkProtocol, NetworkProtocolNameToValue, NetworkProtocolValueToName, NotAwaitedRequestError, ObjectTypeDef, PatchConflict, PatchConflictNameToValue, PatchConflictValueToName, Port, RegistryProtocol, RegistryProtocolNameToValue, RegistryProtocolValueToName, RemoteGitMirror, ReturnType, ReturnTypeNameToValue, ReturnTypeValueToName, SDKConfig, ScalarTypeDef, Schema, SearchResult, SearchSubmatch, Secret, Service, Socket, SourceMap, Stat, Terminal, TerminalGroup, TerminalTarget, TooManyNestedObjectsError, TypeDef, TypeDefKind, TypeDefKindNameToValue, TypeDefKindValueToName, UnknownDaggerError, Up, UpGroup, Volume, Workspace, WorkspaceGit, WorkspaceMigration, WorkspaceMigrationStep, WorkspaceModule, WorkspaceModuleSetting, WorkspaceSDK, _ExportableClient, _NodeClient, _SyncerClient, agent, argument, check, connect, connection, dag, enumType, field, func, generate, getRegisteredClass, getTracer, object, up };
-export type { AddressDirectoryOpts, AddressFileOpts, AgentGroupComposeOpts, BuildArg, Bytes, CallbackFct, ChangesetWithChangesetOpts, ChangesetWithChangesetsOpts, CheckGroupRunOpts, ClientBlobOpts, ClientCacheVolumeOpts, ClientContainerOpts, ClientCurrentTypeDefsOpts, ClientEngineVolumeOpts, ClientEnvFileOpts, ClientFileOpts, ClientGitOpts, ClientHttpOpts, ClientLLMOpts, ClientModuleSourceOpts, ClientSecretOpts, ClientSshfsVolumeOpts, ConnectOpts, ContainerAsServiceOpts, ContainerAsTarballOpts, ContainerDirectoryOpts, ContainerExistsOpts, ContainerExportImageOpts, ContainerExportOpts, ContainerFileOpts, ContainerFromOpts, ContainerImportOpts, ContainerLayerOpts, ContainerManifestOpts, ContainerPublishOpts, ContainerStatOpts, ContainerTerminalOpts, ContainerUpOpts, ContainerWithDefaultTerminalCmdOpts, ContainerWithDirectoryOpts, ContainerWithDockerHealthcheckOpts, ContainerWithEntrypointOpts, ContainerWithEnvVariableOpts, ContainerWithExecOpts, ContainerWithExposedPortOpts, ContainerWithFileOpts, ContainerWithFilesOpts, ContainerWithMountedCacheOpts, ContainerWithMountedDirectoryOpts, ContainerWithMountedFileOpts, ContainerWithMountedSecretOpts, ContainerWithMountedTempOpts, ContainerWithMountedVolumeOpts, ContainerWithNewFileOpts, ContainerWithSymlinkOpts, ContainerWithUnixSocketOpts, ContainerWithWorkdirOpts, ContainerWithoutDirectoryOpts, ContainerWithoutEntrypointOpts, ContainerWithoutExposedPortOpts, ContainerWithoutFileOpts, ContainerWithoutFilesOpts, ContainerWithoutMountOpts, ContainerWithoutUnixSocketOpts, CurrentModuleGeneratorsOpts, CurrentModuleWorkdirOpts, DirectoryAsModuleOpts, DirectoryAsModuleSourceOpts, DirectoryAsWorkspaceOpts, DirectoryDockerBuildOpts, DirectoryEntriesOpts, DirectoryExistsOpts, DirectoryExportOpts, DirectoryFilterOpts, DirectorySearchOpts, DirectoryStatOpts, DirectoryTerminalOpts, DirectoryWithDirectoryOpts, DirectoryWithFileOpts, DirectoryWithFilesOpts, DirectoryWithNewDirectoryOpts, DirectoryWithNewFileOpts, DirectoryWithPatchFileOpts, DirectoryWithPatchOpts, EngineCacheEntrySetOpts, EngineCachePruneOpts, EnvFileGetOpts, EnvFileVariablesOpts, Exportable, FileAsEnvFileOpts, FileContentsOpts, FileDigestOpts, FileExportOpts, FileSearchOpts, FileWithReplacedOpts, FunctionWithArgOpts, FunctionWithCachePolicyOpts, FunctionWithDeprecatedOpts, GeneratorGroupChangesOpts, GeneratorGroupWorkspaceOpts, GitCommitAncestorReleaseTagOpts, GitCommitReleaseTagOpts, GitCommitTreeOpts, GitRefAsWorkspaceOpts, GitRefLogOpts, GitRefTreeOpts, GitRepositoryAsWorkspaceOpts, GitRepositoryBranchesOpts, GitRepositoryBundleOpts, GitRepositoryLatestOpts, GitRepositoryTagsOpts, GitRepositoryWithBundleOpts, HostDirectoryOpts, HostFileOpts, HostFindUpOpts, HostServiceOpts, HostTunnelOpts, ID, JSON, JSONValueContentsOpts, LLMContentBlockInput, LLMLoopOpts, LLMStepOpts, LLMWithModelOpts, LLMWithResponseOpts, LLMWithToolsOpts, ModuleChecksOpts, ModuleGeneratorsOpts, ModuleServeOpts, ModuleServicesOpts, Node, PipelineLabel, Platform, PortForward, ServiceEndpointOpts, ServiceStopOpts, ServiceTerminalOpts, ServiceUpOpts, Syncer, TypeDefWithEnumMemberOpts, TypeDefWithEnumOpts, TypeDefWithEnumValueOpts, TypeDefWithFieldOpts, TypeDefWithInterfaceOpts, TypeDefWithObjectOpts, TypeDefWithScalarOpts, Void, WorkspaceAgentsOpts, WorkspaceChangesOpts, WorkspaceChecksOpts, WorkspaceConfigReadOpts, WorkspaceDirectoryOpts, WorkspaceFindRootsOpts, WorkspaceFindUpOpts, WorkspaceGeneratorsOpts, WorkspaceSearchOpts, WorkspaceServicesOpts, WorkspaceTerminalsOpts, WorkspaceWithClientOpts, WorkspaceWithConfigEnvOpts, WorkspaceWithConfigValueOpts, WorkspaceWithFileOpts, WorkspaceWithInitModuleOpts, WorkspaceWithModuleOpts, WorkspaceWithNewFileOpts, WorkspaceWithSdkOpts, WorkspaceWithUpdatedClientsOpts, WorkspaceWithUpdatedLockOpts, WorkspaceWithUpdatedModulesOpts, WorkspaceWithoutClientOpts, WorkspaceWithoutConfigEnvOpts, WorkspaceWithoutConfigValueOpts, WorkspaceWithoutModuleOpts, WorkspaceWithoutSdkOpts, __DirectiveArgsOpts, __FieldArgsOpts, __TypeEnumValuesOpts, __TypeFieldsOpts, __TypeInputFieldsOpts, float };
+export { Address, Agent, AgentMessage, AgentMessageDelivery, AgentMessageDeliveryNameToValue, AgentMessageDeliveryValueToName, AgentState, AgentStateNameToValue, AgentStateValueToName, Artifact, ArtifactDimension, ArtifactDimensionKey, ArtifactDimensionKind, ArtifactDimensionKindNameToValue, ArtifactDimensionKindValueToName, ArtifactPath, ArtifactResult, Artifacts, BaseClient, CacheSharingMode, CacheSharingModeNameToValue, CacheSharingModeValueToName, CacheVolume, Changeset, ChangesetMergeConflict, ChangesetMergeConflictNameToValue, ChangesetMergeConflictValueToName, ChangesetsMergeConflict, ChangesetsMergeConflictNameToValue, ChangesetsMergeConflictValueToName, Check, Client, ClientFilesyncMirror, Cloud, CollectionDelta, CollectionTypeDef, Command, Container, Context, CurrentModule, DaggerSDKError, DiffStat, DiffStatKind, DiffStatKindNameToValue, DiffStatKindValueToName, Directory, DockerImageRefValidationError, ERROR_CODES, Engine, EngineCache, EngineCacheEntry, EngineCacheEntrySet, EngineSessionConnectParamsParseError, EngineSessionConnectionTimeoutError, EngineSessionError, EnumTypeDef, EnumValueTypeDef, EnvFile, EnvVariable, Error$1 as Error, ErrorValue, ExecError, ExistsType, ExistsTypeNameToValue, ExistsTypeValueToName, Expertise, FieldTypeDef, File, FileType, FileTypeNameToValue, FileTypeValueToName, FunctionArg, FunctionCachePolicy, FunctionCachePolicyNameToValue, FunctionCachePolicyValueToName, FunctionCall, FunctionCallArgValue, FunctionNotFound, Function_, GeneratedCode, Generator, GitBundle, GitBundleRef, GitCommit, GitPushDisposition, GitPushDispositionNameToValue, GitPushDispositionValueToName, GitPushResult, GitRef, GitRepository, GraphQLRequestError, HTTPState, HealthcheckConfig, Host, ImageLayerCompression, ImageLayerCompressionNameToValue, ImageLayerCompressionValueToName, ImageMediaTypes, ImageMediaTypesNameToValue, ImageMediaTypesValueToName, InitEngineSessionBinaryError, InputTypeDef, InterfaceTypeDef, IntrospectionError, JSONValue, LLM, LLMContentBlock, LLMContentBlockKind, LLMContentBlockKindNameToValue, LLMContentBlockKindValueToName, LLMMessage, LLMMessageOrigin, LLMMessageOriginKind, LLMMessageOriginKindNameToValue, LLMMessageOriginKindValueToName, LLMMessageRole, LLMMessageRoleNameToValue, LLMMessageRoleValueToName, LLMSkill, LLMTokenUsage, Label, ListTypeDef, ModuleConfigClient, ModuleSource, ModuleSourceExperimentalFeature, ModuleSourceExperimentalFeatureNameToValue, ModuleSourceExperimentalFeatureValueToName, ModuleSourceKind, ModuleSourceKindNameToValue, ModuleSourceKindValueToName, Module_, NetworkProtocol, NetworkProtocolNameToValue, NetworkProtocolValueToName, NotAwaitedRequestError, ObjectTypeDef, PatchConflict, PatchConflictNameToValue, PatchConflictValueToName, Port, RegistryProtocol, RegistryProtocolNameToValue, RegistryProtocolValueToName, RemoteGitMirror, ReturnType, ReturnTypeNameToValue, ReturnTypeValueToName, SDKConfig, ScalarTypeDef, Schema, SearchResult, SearchSubmatch, Secret, Service, Socket, SourceMap, Stat, Terminal, TooManyNestedObjectsError, TypeDef, TypeDefKind, TypeDefKindNameToValue, TypeDefKindValueToName, UnknownDaggerError, Volume, Workspace, WorkspaceCommitPick, WorkspaceCommitPickReason, WorkspaceCommitPickReasonNameToValue, WorkspaceCommitPickReasonValueToName, WorkspaceCommitPickStatus, WorkspaceCommitPickStatusNameToValue, WorkspaceCommitPickStatusValueToName, WorkspaceGit, WorkspaceMigration, WorkspaceMigrationStep, WorkspaceModule, WorkspaceModuleSetting, WorkspaceSDK, _ExportableClient, _NodeClient, _SyncerClient, agent, argument, check, collection, connect, connection, dag, delta, enumType, field, func, generate, get, getRegisteredClass, getTracer, keys, object, up };
+export type { AddressDirectoryOpts, AddressFileOpts, AgentNotifyOpts, AgentPauseOpts, AgentSendOpts, AgentStopOpts, ArtifactUriOpts, ArtifactValueOpts, ArtifactsFilterCheckCommandOpts, ArtifactsFilterDirectivesOpts, ArtifactsFilterParentDirectivesOpts, ArtifactsFilterParentTypesOpts, ArtifactsFilterTypesOpts, ArtifactsPathDefinitionsOpts, ArtifactsValuesOpts, BuildArg, Bytes, CallbackFct, ChangesetFilterOpts, ChangesetWithChangesetOpts, ChangesetWithChangesetsOpts, ClientBlobOpts, ClientCacheVolumeOpts, ClientContainerOpts, ClientCurrentTypeDefsOpts, ClientEngineVolumeOpts, ClientEnvFileOpts, ClientFileOpts, ClientGitOpts, ClientHttpOpts, ClientLLMOpts, ClientModuleSourceOpts, ClientSecretOpts, ClientServeModuleOpts, ClientSshfsVolumeOpts, ConnectOpts, ContainerAsServiceOpts, ContainerAsTarballOpts, ContainerDirectoryOpts, ContainerExistsOpts, ContainerExportImageOpts, ContainerExportOpts, ContainerFileOpts, ContainerFromOpts, ContainerImportOpts, ContainerLayerOpts, ContainerManifestOpts, ContainerPublishOpts, ContainerShellOpts, ContainerStatOpts, ContainerTerminalOpts, ContainerUpOpts, ContainerWithDefaultTerminalCmdOpts, ContainerWithDirectoryOpts, ContainerWithDockerHealthcheckOpts, ContainerWithEntrypointOpts, ContainerWithEnvVariableOpts, ContainerWithExecOpts, ContainerWithExposedPortOpts, ContainerWithFileOpts, ContainerWithFilesOpts, ContainerWithMountedCacheOpts, ContainerWithMountedDirectoryOpts, ContainerWithMountedFileOpts, ContainerWithMountedSecretOpts, ContainerWithMountedTempOpts, ContainerWithMountedVolumeOpts, ContainerWithNewFileOpts, ContainerWithRunOpts, ContainerWithShellOpts, ContainerWithSymlinkOpts, ContainerWithUnixSocketOpts, ContainerWithWorkdirOpts, ContainerWithoutDirectoryOpts, ContainerWithoutEntrypointOpts, ContainerWithoutExposedPortOpts, ContainerWithoutFileOpts, ContainerWithoutFilesOpts, ContainerWithoutMountOpts, ContainerWithoutUnixSocketOpts, CurrentModuleWorkdirOpts, DirectoryAsModuleOpts, DirectoryAsModuleSourceOpts, DirectoryAsWorkspaceOpts, DirectoryDockerBuildOpts, DirectoryEntriesOpts, DirectoryExistsOpts, DirectoryExportOpts, DirectoryFilterOpts, DirectorySearchOpts, DirectoryStatOpts, DirectoryTerminalOpts, DirectoryWithDirectoryOpts, DirectoryWithFileOpts, DirectoryWithFilesOpts, DirectoryWithNewDirectoryOpts, DirectoryWithNewFileOpts, DirectoryWithPatchFileOpts, DirectoryWithPatchOpts, EngineCacheEntrySetOpts, EngineCachePruneOpts, EnvFileGetOpts, EnvFileVariablesOpts, Exportable, FileAsEnvFileOpts, FileContentsOpts, FileDigestOpts, FileExportOpts, FileSearchOpts, FileWithReplacedOpts, FunctionWithArgOpts, FunctionWithCachePolicyOpts, FunctionWithDeprecatedOpts, GitCommitAncestorReleaseTagOpts, GitCommitChangesOpts, GitCommitReleaseTagOpts, GitCommitTreeOpts, GitRefAsWorkspaceOpts, GitRefLogOpts, GitRefPushOpts, GitRefTreeOpts, GitRefWithCommitOpts, GitRepositoryAsWorkspaceOpts, GitRepositoryBranchesOpts, GitRepositoryBundleOpts, GitRepositoryLatestOpts, GitRepositoryTagsOpts, GitRepositoryWithBundleOpts, GitRepositoryWithRemoteOpts, HostDirectoryOpts, HostFileOpts, HostFindUpOpts, HostServiceOpts, HostTunnelOpts, ID, JSON, JSONValueContentsOpts, LLMContentBlockInput, LLMLoopOpts, LLMMessageOriginInput, LLMSpawnOpts, LLMStepOpts, LLMWithContentFileOpts, LLMWithContentOpts, LLMWithModelOpts, LLMWithPromptOpts, LLMWithResponseOpts, LLMWithToolResultOpts, LLMWithToolsOpts, ModuleServeOpts, Node, PipelineLabel, Platform, PortForward, ServiceEndpointOpts, ServicePortsOpts, ServiceStopOpts, ServiceTerminalOpts, ServiceUpOpts, Syncer, TypeDefWithEnumMemberOpts, TypeDefWithEnumOpts, TypeDefWithEnumValueOpts, TypeDefWithFieldOpts, TypeDefWithInterfaceOpts, TypeDefWithObjectOpts, TypeDefWithScalarOpts, Void, WorkspaceArtifactsOpts, WorkspaceChangesOpts, WorkspaceCompareCommitsFromOpts, WorkspaceConfigReadOpts, WorkspaceDirectoryOpts, WorkspaceExportOpts, WorkspaceFindRootsOpts, WorkspaceFindUpOpts, WorkspaceMigrateModuleOpts, WorkspaceMigrateOpts, WorkspaceSearchOpts, WorkspaceWithClientOpts, WorkspaceWithCommitOpts, WorkspaceWithCommitsFromOpts, WorkspaceWithConfigEnvOpts, WorkspaceWithConfigValueOpts, WorkspaceWithFileOpts, WorkspaceWithInitModuleOpts, WorkspaceWithModuleOpts, WorkspaceWithNewFileOpts, WorkspaceWithResetOpts, WorkspaceWithSdkOpts, WorkspaceWithUpdatedClientsOpts, WorkspaceWithUpdatedLockOpts, WorkspaceWithUpdatedModulesOpts, WorkspaceWithoutClientOpts, WorkspaceWithoutConfigEnvOpts, WorkspaceWithoutConfigValueOpts, WorkspaceWithoutModuleOpts, WorkspaceWithoutSdkOpts, __DirectiveArgsOpts, __FieldArgsOpts, __TypeEnumValuesOpts, __TypeFieldsOpts, __TypeInputFieldsOpts, float };
