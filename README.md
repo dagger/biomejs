@@ -71,7 +71,8 @@ dagger check --biomejs-biome-project=packages/ui        # one project
 dagger check biomejs/projects/lint --biomejs-biome-project=app
 ```
 
-Flags from `dagger check --help`:
+Selection flags, from `dagger check --help` (module settings are listed by
+`dagger settings biomejs`, see [Settings](#settings)):
 
 | Flag | Selects |
 | --- | --- |
@@ -99,7 +100,9 @@ Biome failed in 3 project(s):
 
 `fix` runs `biome check --write` and returns Biome's safe fixes as a
 changeset, for every file type Biome fixes (JavaScript, TypeScript, JSON, CSS
-and more). Fixes are returned even when diagnostics without a safe fix remain.
+and more). Fixes are returned even when diagnostics without a safe fix remain; `fix`
+then prints Biome's count of what is left (for example
+`failing: Found 1 error. Skipped 1 suggested fixes (apply with biome check --write --unsafe).`).
 `dagger call` cannot select an item from a collection yet, so pick the project
 by its key in the Dagger shell. `export .` writes the changes:
 
@@ -149,7 +152,8 @@ rather than fetching a different version.
   lockfiles, `pnpm-workspace.yaml`, `.npmrc`, `.yarnrc*`, `.yarn/{releases,plugins,patches}`,
   `.pnpmfile.cjs`, `bunfig.toml` and `patches/`, plus the directories of
   `file:`, `link:` and `portal:` dependencies and of pnpm workspace packages
-  marked `injected`, which package managers copy at install time. If a
+  marked `injected`, which package managers copy at install time, and the
+  `bin` files of workspace packages, which they link. If a
   `package.json` does not parse, the install sees the full source instead.
   The rest of the source is laid over the result, so editing a source file
   does not reinstall. Package manager caches and corepack live on cache
