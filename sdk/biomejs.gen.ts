@@ -18,26 +18,40 @@ export type BiomejsBiomeProjectFixOpts = {
   /**
    * Files to fix, relative to the project root.
    */
-  files?: string[] // biomejs (../src/index.ts:213:3)
+  files?: string[] // biomejs (../src/index.ts:479:3)
 
   /**
-   * Patterns, relative to the project root, of files to include in the changeset.
+   * Patterns, relative to the project root, of files to include in the changeset. Empty includes every file Biome fixed.
    */
-  fixFilter?: string[] // biomejs (../src/index.ts:214:3)
+  fixFilter?: string[] // biomejs (../src/index.ts:480:3)
 }
 
 export type ClientBiomejsOpts = {
   /**
-   * The base image to use.
-   * 
-   * This assume biome will run in a node container using npm
-   * as package manager.
+   * Base image for Biome containers. It must provide Node.js and npm.
    */
-  baseImageAddress: string // biomejs (../src/index.ts:337:3)
+  baseImageAddress: string // biomejs (../src/index.ts:853:3)
+
+  /**
+   * Package manager that installs dependencies: npm, yarn, pnpm or bun.
+   * Empty detects it from package.json's packageManager field, else the
+   * lockfile, else npm.
+   */
+  packageManager: string // biomejs (../src/index.ts:859:3)
+
+  /**
+   * Extra arguments for the install command, e.g. ["--ignore-scripts"].
+   */
+  installFlags?: string[] // biomejs (../src/index.ts:863:3)
+
+  /**
+   * Environment variables for Biome, as KEY=VALUE.
+   */
+  environment?: string[] // biomejs (../src/index.ts:867:3)
 }
 
 
-export class Biomejs extends BaseClient { // biomejs (../src/index.ts:327:14)
+export class Biomejs extends BaseClient { // biomejs (../src/index.ts:840:14)
   private readonly _id?: ID | undefined = undefined
 
   /**
@@ -73,7 +87,7 @@ export class Biomejs extends BaseClient { // biomejs (../src/index.ts:327:14)
   /**
    * Biome projects at or below the working directory, keyed by project root.
    */
-  projects = (ws: Workspace): BiomejsBiomeProjects => { // biomejs (../src/index.ts:346:8)
+  projects = (ws: Workspace): BiomejsBiomeProjects => { // biomejs (../src/index.ts:879:8)
 
     const ctx = this._ctx.select(
       "projects",
@@ -87,7 +101,7 @@ export class Biomejs extends BaseClient { // biomejs (../src/index.ts:327:14)
  * A Biome project, rooted at a workspace-relative directory holding a root
  * Biome configuration.
  */
-export class BiomejsBiomeProject extends BaseClient { // biomejs (../src/index.ts:178:14)
+export class BiomejsBiomeProject extends BaseClient { // biomejs (../src/index.ts:422:14)
   private readonly _id?: ID | undefined = undefined
   private readonly _path?: string | undefined = undefined
 
@@ -124,13 +138,17 @@ export class BiomejsBiomeProject extends BaseClient { // biomejs (../src/index.t
   }
 
   /**
-   * Fix lint issues in this project and return the changes, rooted at the
-   * workspace root.
+   * Apply Biome's safe fixes to this project and return the changes.
+   * 
+   * The changes are rooted at the caller's working directory, where the CLI
+   * applies them: a project below it is placed at its relative path, and an
+   * enclosing project contributes only the working directory's subtree.
+   * Fixes are returned even when diagnostics Biome cannot fix remain.
    * @param opts.files Files to fix, relative to the project root.
-   * @param opts.fixFilter Patterns, relative to the project root, of files to include in the changeset.
+   * @param opts.fixFilter Patterns, relative to the project root, of files to include in the changeset. Empty includes every file Biome fixed.
    */
-  fix = (ws: Workspace, opts?: BiomejsBiomeProjectFixOpts // biomejs (../src/index.ts:211:8) 
-		): Changeset => { // biomejs (../src/index.ts:211:8)
+  fix = (ws: Workspace, opts?: BiomejsBiomeProjectFixOpts // biomejs (../src/index.ts:477:8) 
+		): Changeset => { // biomejs (../src/index.ts:477:8)
 
     const ctx = this._ctx.select(
       "fix",
@@ -142,7 +160,7 @@ export class BiomejsBiomeProject extends BaseClient { // biomejs (../src/index.t
   /**
    * Lint this project.
    */
-  lint = (ws: Workspace): Check => { // biomejs (../src/index.ts:197:8)
+  lint = (ws: Workspace): Check => { // biomejs (../src/index.ts:456:8)
 
     const ctx = this._ctx.select(
       "lint",
@@ -154,7 +172,7 @@ export class BiomejsBiomeProject extends BaseClient { // biomejs (../src/index.t
   /**
    * Project root, relative to the workspace.
    */
-  path = async (): Promise<string> => { // biomejs (../src/index.ts:183:2)
+  path = async (): Promise<string> => { // biomejs (../src/index.ts:427:2)
     if (this._path) {
       return this._path
     }
@@ -174,7 +192,7 @@ export class BiomejsBiomeProject extends BaseClient { // biomejs (../src/index.t
  * Biome projects in a workspace, keyed by the directory of their root Biome
  * configuration.
  */
-export class BiomejsBiomeProjects extends BaseClient { // biomejs (../src/index.ts:280:14)
+export class BiomejsBiomeProjects extends BaseClient { // biomejs (../src/index.ts:774:14)
   private readonly _id?: ID | undefined = undefined
 
   /**
@@ -221,7 +239,7 @@ export class BiomejsBiomeProjects extends BaseClient { // biomejs (../src/index.
   /**
    * The Biome project rooted at path.
    */
-  get = (key: string): BiomejsBiomeProject => { // biomejs (../src/index.ts:298:2)
+  get = (key: string): BiomejsBiomeProject => { // biomejs (../src/index.ts:807:2)
 
     const ctx = this._ctx.select(
       "get",
@@ -288,7 +306,7 @@ export class BiomejsBiomeProjects extends BaseClient { // biomejs (../src/index.
  * Biome projects in a workspace, keyed by the directory of their root Biome
  * configuration.
  */
-export class BiomejsBiomeProjects_Batch extends BaseClient { // biomejs (../src/index.ts:280:14)
+export class BiomejsBiomeProjects_Batch extends BaseClient { // biomejs (../src/index.ts:774:14)
   private readonly _id?: ID | undefined = undefined
 
   /**
@@ -324,7 +342,7 @@ export class BiomejsBiomeProjects_Batch extends BaseClient { // biomejs (../src/
   /**
    * Lint the selected Biome projects.
    */
-  lint = (ws: Workspace): Check => { // biomejs (../src/index.ts:307:8)
+  lint = (ws: Workspace): Check => { // biomejs (../src/index.ts:822:8)
 
     const ctx = this._ctx.select(
       "lint",
@@ -358,10 +376,12 @@ export class Client extends BaseClient {
 
   /**
    * A BiomeJS toolchain to execute Biome on a JavaScript project.
-   * @param opts.baseImageAddress The base image to use.
-   * 
-   * This assume biome will run in a node container using npm
-   * as package manager.
+   * @param opts.baseImageAddress Base image for Biome containers. It must provide Node.js and npm.
+   * @param opts.packageManager Package manager that installs dependencies: npm, yarn, pnpm or bun.
+   * Empty detects it from package.json's packageManager field, else the
+   * lockfile, else npm.
+   * @param opts.installFlags Extra arguments for the install command, e.g. ["--ignore-scripts"].
+   * @param opts.environment Environment variables for Biome, as KEY=VALUE.
    */
   biomejs = (opts?: ClientBiomejsOpts // biomejs (../:0:0) 
 		): Biomejs => { // biomejs (../:0:0)

@@ -150,7 +150,7 @@ export enum AgentState {
   Stopped = "STOPPED",
 
   /**
-   * Blocked on input from the user (derived; see waitingOn).
+   * Blocked on input from the user.
    */
   WaitingInput = "WAITING_INPUT",
 }
@@ -263,13 +263,6 @@ export function ArtifactDimensionKindNameToValue(name: string): ArtifactDimensio
       return name as ArtifactDimensionKind
   }
 }
-export type ArtifactsFilterCheckCommandOpts = {
-  /**
-   * Include generated-file checks. Defaults to the workspace check-generated setting, or true when unset.
-   */
-  generated?: boolean
-}
-
 export type ArtifactsFilterDirectivesOpts = {
   /**
    * Remove the matching artifacts instead.
@@ -2467,6 +2460,11 @@ export type LLMSpawnOpts = {
   state?: AgentState
 
   /**
+   * Recorded parent handle when restoring an agent. Lineage does not install a notification subscription. Requires a supplied handle. The parent must already be restored in this session and cannot be the agent itself or its descendant.
+   */
+  parentHandle?: string
+
+  /**
    * The loop error to create the agent with, for state FAILED. Refused with any other state.
    */
   error?: string
@@ -4481,6 +4479,8 @@ export class Agent extends BaseClient {
    * 
    * Events never relaunch a stopped subscriber, and an already-reached state fires immediately at subscribe time, so a fast agent settling before the subscription lands is not missed.
    * 
+   * A restored agent that nothing has sent to, started, or resumed yet is the exception: its state was reached in the session it was restored from, so subscribing to it announces nothing until it next transitions. This is how a restore reinstalls recorded subscriptions without waking their subscribers.
+   * 
    * Idempotent per subscriber; re-subscribing replaces the state set.
    * @param subscriber The agent to deliver event messages to. You must hold its handle: subscriptions are capability-based like everything else.
    * @param opts.on The lifecycle states that fire an event. IDLE events carry the turn's final reply; FAILED events carry the loop error.
@@ -5063,7 +5063,7 @@ export class ArtifactDimension extends BaseClient {
   }
 
   /**
-   * Stable identifier: ParentType.field for a collection, type:TypeName for an artifact type, or module.
+   * Stable identifier: collection schema path, type:TypeName for an artifact type, or module.
    */
   identifier = async (): Promise<string> => {
     if (this._identifier) {
@@ -5676,32 +5676,6 @@ export class Artifacts extends BaseClient {
   }
 
   /**
-   * Select Expertise artifacts.
-   * @deprecated Use filterTypes with Expertise.
-   */
-  filterAgentCommand = (): Artifacts => {
-
-    const ctx = this._ctx.select(
-      "filterAgentCommand",
-    )
-    return new Artifacts(ctx)
-  }
-
-  /**
-   * Select Check artifacts for dagger check, using each workspace's check and generator settings. Include staleness checks from Generators.
-   * @param opts.generated Include generated-file checks. Defaults to the workspace check-generated setting, or true when unset.
-   * @deprecated Use filterTypes and apply workspace settings in the caller.
-   */
-  filterCheckCommand = (opts?: ArtifactsFilterCheckCommandOpts): Artifacts => {
-
-    const ctx = this._ctx.select(
-      "filterCheckCommand",
-      { ...opts },
-    )
-    return new Artifacts(ctx)
-  }
-
-  /**
    * Keep artifacts with any listed key in this dimension.
    */
   filterDimensionKeys = (dimension: string, keys: string[]): Artifacts => {
@@ -5734,18 +5708,6 @@ export class Artifacts extends BaseClient {
     const ctx = this._ctx.select(
       "filterDirectives",
       { directives, ...opts },
-    )
-    return new Artifacts(ctx)
-  }
-
-  /**
-   * Select Generator artifacts, using each workspace's generator settings.
-   * @deprecated Use filterTypes and apply workspace settings in the caller.
-   */
-  filterGenerateCommand = (): Artifacts => {
-
-    const ctx = this._ctx.select(
-      "filterGenerateCommand",
     )
     return new Artifacts(ctx)
   }
@@ -5809,18 +5771,6 @@ export class Artifacts extends BaseClient {
     const ctx = this._ctx.select(
       "filterTypes",
       { types, ...opts },
-    )
-    return new Artifacts(ctx)
-  }
-
-  /**
-   * Select Service artifacts, using each workspace's service settings. Does not require the up directive.
-   * @deprecated Use filterTypes and apply workspace settings in the caller.
-   */
-  filterUpCommand = (): Artifacts => {
-
-    const ctx = this._ctx.select(
-      "filterUpCommand",
     )
     return new Artifacts(ctx)
   }
@@ -7115,11 +7065,10 @@ export class Container extends BaseClient {
   }
 
   /**
-   * EXPERIMENTAL API! Subject to change/removal at any time.
-   * 
    * Configures all available GPUs on the host to be accessible to this container.
    * 
    * This currently works for Nvidia devices only.
+   * @deprecated Use "withGPU" instead.
    */
   experimentalWithAllGPUs = (): Container => {
 
@@ -7130,12 +7079,11 @@ export class Container extends BaseClient {
   }
 
   /**
-   * EXPERIMENTAL API! Subject to change/removal at any time.
-   * 
    * Configures the provided list of devices to be accessible to this container.
    * 
    * This currently works for Nvidia devices only.
    * @param devices List of devices to be accessible to this container.
+   * @deprecated Use "withGPU" instead, which exposes all GPUs available on the host.
    */
   experimentalWithGPU = (devices: string[]): Container => {
 
@@ -7885,6 +7833,19 @@ export class Container extends BaseClient {
     const ctx = this._ctx.select(
       "withFiles",
       { path, sources, ...opts },
+    )
+    return new Container(ctx)
+  }
+
+  /**
+   * Configures all GPUs available on the host to be accessible to this container.
+   * 
+   * This currently works with NVIDIA devices only, and requires the engine to run with GPU support enabled.
+   */
+  withGPU = (): Container => {
+
+    const ctx = this._ctx.select(
+      "withGPU",
     )
     return new Container(ctx)
   }
@@ -12798,6 +12759,8 @@ export class GitRepository extends BaseClient {
    * @param name Ref's name (can be a commit identifier, a tag name, a branch name, or a fully-qualified ref).
    * 
    * Commit identifiers may be abbreviated: an unambiguous hex prefix (4-40 characters) of a commit SHA resolves like git rev-parse, with named refs taking precedence. Abbreviated SHAs resolve against locally available objects, so remote repositories (resolved via ls-remote) can only expand prefixes of already-fetched commits; use the full SHA or a named ref otherwise.
+   * 
+   * The name may be followed by git revision suffixes, applied left to right: `~N` follows first parents N times and `^N` selects the Nth parent (`~` and `^` mean 1, `^0` is the commit itself), e.g. `HEAD~3`, `main^2` or `abc1234~2`. The result is a detached ref of the resulting commit; remote repositories fetch the history the walk needs. Other git revision syntax (`^{...}`, `@{...}`, `:path`, ranges) is not supported.
    */
   ref = (name: string): GitRef => {
 
@@ -13614,11 +13577,9 @@ export class LLM extends BaseClient {
   private readonly _id?: ID | undefined = undefined
   private readonly _contextTokens?: number | undefined = undefined
   private readonly _contextWindow?: number | undefined = undefined
-  private readonly _emitHistory?: ID | undefined = undefined
   private readonly _hasPending?: boolean | undefined = undefined
   private readonly _lastReply?: string | undefined = undefined
   private readonly _model?: string | undefined = undefined
-  private readonly _portableID?: ID | undefined = undefined
   private readonly _provider?: string | undefined = undefined
   private readonly _reasoningEffort?: string | undefined = undefined
   private readonly _spawn?: ID | undefined = undefined
@@ -13634,11 +13595,9 @@ export class LLM extends BaseClient {
      _id?: ID,
      _contextTokens?: number,
      _contextWindow?: number,
-     _emitHistory?: ID,
      _hasPending?: boolean,
      _lastReply?: string,
      _model?: string,
-     _portableID?: ID,
      _provider?: string,
      _reasoningEffort?: string,
      _spawn?: ID,
@@ -13651,11 +13610,9 @@ export class LLM extends BaseClient {
      this._id = _id
      this._contextTokens = _contextTokens
      this._contextWindow = _contextWindow
-     this._emitHistory = _emitHistory
      this._hasPending = _hasPending
      this._lastReply = _lastReply
      this._model = _model
-     this._portableID = _portableID
      this._provider = _provider
      this._reasoningEffort = _reasoningEffort
      this._spawn = _spawn
@@ -13746,20 +13703,6 @@ export class LLM extends BaseClient {
 
     
     return response
-  }
-
-  /**
-   * Re-emit telemetry spans for the full message history, so a loaded conversation displays in the TUI.
-   */
-  emitHistory = async (): Promise<LLM> => {
-    const ctx = this._ctx.select(
-      "emitHistory",
-    )
-
-    const response: Awaited<ID> = await ctx.execute()
-
-    
-    return new LLM(ctx.copy().selectNode(response, "LLM"))
   }
 
   /**
@@ -13862,24 +13805,6 @@ export class LLM extends BaseClient {
   }
 
   /**
-   * A portable, self-contained ID for the conversation that node() can resolve in any session. Unlike id, which may return an engine-local runtime handle valid only within the current session, this returns the recipe form suitable for persisting and later restoring the conversation. The recipe is flattened: bindings superseded during the session (workspace overlays recorded by each mutating tool call, and re-bound toolsets) are dropped, while the current workspace binding — including any pending, un-exported edits — is preserved.
-   */
-  portableID = async (): Promise<ID> => {
-    if (this._portableID) {
-      return this._portableID
-    }
-
-    const ctx = this._ctx.select(
-      "portableID",
-    )
-
-    const response: Awaited<ID> = await ctx.execute()
-
-    
-    return response
-  }
-
-  /**
    * The provider serving the model, e.g. "anthropic", "openai", "google", or "local".
    */
   provider = async (): Promise<string> => {
@@ -13963,6 +13888,7 @@ export class LLM extends BaseClient {
    * @param opts.state The lifecycle state to create the agent in, as facts on the entry: IDLE is ready to be prompted, PAUSED parks it, FAILED holds an error a resume retries past, STOPPED preserves a dormant snapshot that send or resume can relaunch.
    * 
    * RUNNING and WAITING_INPUT are refused: they describe a loop, and a restored loop died with the session that published it — restore such an agent as IDLE, its interrupted turn's input still pending on the conversation.
+   * @param opts.parentHandle Recorded parent handle when restoring an agent. Lineage does not install a notification subscription. Requires a supplied handle. The parent must already be restored in this session and cannot be the agent itself or its descendant.
    * @param opts.error The loop error to create the agent with, for state FAILED. Refused with any other state.
    * @experimental
    */
@@ -19997,7 +19923,7 @@ export class Workspace extends BaseClient {
    * With hard, the working tree is reset to the commit and every uncommitted change is discarded.
    * 
    * Commits orphaned by the reset are not preserved: the frozen repository keeps reachable history only, so a reset cannot be undone by resetting forward again.
-   * @param commit Full commit hash to reset HEAD to.
+   * @param commit Commit to reset HEAD to, resolved against this workspace's repository like GitRepository.ref: a full commit hash, an unambiguous hex prefix (4-40 characters), or a ref name, optionally followed by revision suffixes such as HEAD~1, main^2 or abc1234~2. Only the commit it resolves to is used: a ref name selects its commit, it does not check out that ref.
    * @param opts.hard Discard uncommitted changes, resetting the working tree to the commit.
    */
   withReset = (commit: string, opts?: WorkspaceWithResetOpts): Workspace => {

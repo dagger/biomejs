@@ -32,6 +32,12 @@ function formatError(e: unknown): DaggerError {
 function rebuildBiomeProject(state: any): BiomeProject {
   const __obj = Object.assign(Object.create(BiomeProject.prototype), state ?? {})
   if (state) {
+    if (state["environment"] !== undefined && state["environment"] !== null) {
+      __obj["environment"] = (state["environment"] as any[]).map((__v) => __v)
+    }
+    if (state["installFlags"] !== undefined && state["installFlags"] !== null) {
+      __obj["installFlags"] = (state["installFlags"] as any[]).map((__v) => __v)
+    }
   }
   return __obj
 }
@@ -39,12 +45,24 @@ function rebuildBiomeProject(state: any): BiomeProject {
 async function serializeBiomeProject(__obj: BiomeProject): Promise<any> {
   if (__obj === null || __obj === undefined) return __obj
   const __state: any = { ...__obj }
+  if ((__obj as any)["environment"] !== undefined && (__obj as any)["environment"] !== null) {
+    __state["environment"] = await Promise.all(((__obj as any)["environment"] as any[]).map(async (__v) => __v))
+  }
+  if ((__obj as any)["installFlags"] !== undefined && (__obj as any)["installFlags"] !== null) {
+    __state["installFlags"] = await Promise.all(((__obj as any)["installFlags"] as any[]).map(async (__v) => __v))
+  }
   return __state
 }
 
 function rebuildBiomeProjects(state: any): BiomeProjects {
   const __obj = Object.assign(Object.create(BiomeProjects.prototype), state ?? {})
   if (state) {
+    if (state["environment"] !== undefined && state["environment"] !== null) {
+      __obj["environment"] = (state["environment"] as any[]).map((__v) => __v)
+    }
+    if (state["installFlags"] !== undefined && state["installFlags"] !== null) {
+      __obj["installFlags"] = (state["installFlags"] as any[]).map((__v) => __v)
+    }
     if (state["paths"] !== undefined && state["paths"] !== null) {
       __obj["paths"] = (state["paths"] as any[]).map((__v) => __v)
     }
@@ -55,6 +73,12 @@ function rebuildBiomeProjects(state: any): BiomeProjects {
 async function serializeBiomeProjects(__obj: BiomeProjects): Promise<any> {
   if (__obj === null || __obj === undefined) return __obj
   const __state: any = { ...__obj }
+  if ((__obj as any)["environment"] !== undefined && (__obj as any)["environment"] !== null) {
+    __state["environment"] = await Promise.all(((__obj as any)["environment"] as any[]).map(async (__v) => __v))
+  }
+  if ((__obj as any)["installFlags"] !== undefined && (__obj as any)["installFlags"] !== null) {
+    __state["installFlags"] = await Promise.all(((__obj as any)["installFlags"] as any[]).map(async (__v) => __v))
+  }
   if ((__obj as any)["paths"] !== undefined && (__obj as any)["paths"] !== null) {
     __state["paths"] = await Promise.all(((__obj as any)["paths"] as any[]).map(async (__v) => __v))
   }
@@ -64,6 +88,12 @@ async function serializeBiomeProjects(__obj: BiomeProjects): Promise<any> {
 function rebuildBiomejs(state: any): Biomejs {
   const __obj = Object.assign(Object.create(Biomejs.prototype), state ?? {})
   if (state) {
+    if (state["environment"] !== undefined && state["environment"] !== null) {
+      __obj["environment"] = (state["environment"] as any[]).map((__v) => __v)
+    }
+    if (state["installFlags"] !== undefined && state["installFlags"] !== null) {
+      __obj["installFlags"] = (state["installFlags"] as any[]).map((__v) => __v)
+    }
   }
   return __obj
 }
@@ -71,6 +101,12 @@ function rebuildBiomejs(state: any): Biomejs {
 async function serializeBiomejs(__obj: Biomejs): Promise<any> {
   if (__obj === null || __obj === undefined) return __obj
   const __state: any = { ...__obj }
+  if ((__obj as any)["environment"] !== undefined && (__obj as any)["environment"] !== null) {
+    __state["environment"] = await Promise.all(((__obj as any)["environment"] as any[]).map(async (__v) => __v))
+  }
+  if ((__obj as any)["installFlags"] !== undefined && (__obj as any)["installFlags"] !== null) {
+    __state["installFlags"] = await Promise.all(((__obj as any)["installFlags"] as any[]).map(async (__v) => __v))
+  }
   return __state
 }
 
@@ -79,21 +115,21 @@ async function serializeBiomejs(__obj: Biomejs): Promise<any> {
 async function register(): Promise<string> {
   let mod = dag.module_()
   mod = mod.withDescription("A BiomeJS toolchain to execute Biome on a JavaScript project.")
-  let obj_BiomeProject = dag.typeDef().withObject("BiomeProject", { description: "A Biome project, rooted at a workspace-relative directory holding a root\nBiome configuration.", sourceMap: dag.sourceMap("src/index.ts", 178, 14) })
-  obj_BiomeProject = obj_BiomeProject.withFunction(dag.function_("fix", dag.typeDef().withObject("Changeset")).withDescription("Fix lint issues in this project and return the changes, rooted at the\nworkspace root.").withSourceMap(dag.sourceMap("src/index.ts", 211, 8)).withArg("ws", dag.typeDef().withObject("Workspace"), { sourceMap: dag.sourceMap("src/index.ts", 212, 3) }).withArg("files", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)).withOptional(true), { description: "Files to fix, relative to the project root.", sourceMap: dag.sourceMap("src/index.ts", 213, 3) }).withArg("fixFilter", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)).withOptional(true), { description: "Patterns, relative to the project root, of files to include in the changeset.", sourceMap: dag.sourceMap("src/index.ts", 214, 3) }))
-  obj_BiomeProject = obj_BiomeProject.withFunction(dag.function_("lint", dag.typeDef().withKind(TypeDefKind.VoidKind).withOptional(true)).withDescription("Lint this project.").withSourceMap(dag.sourceMap("src/index.ts", 197, 8)).withArg("ws", dag.typeDef().withObject("Workspace"), { sourceMap: dag.sourceMap("src/index.ts", 197, 13) }).withCheck())
-  obj_BiomeProject = obj_BiomeProject.withField("path", dag.typeDef().withKind(TypeDefKind.StringKind), { description: "Project root, relative to the workspace.", sourceMap: dag.sourceMap("src/index.ts", 183, 2) })
-  obj_BiomeProject = obj_BiomeProject.withConstructor(dag.function_("", obj_BiomeProject).withArg("path", dag.typeDef().withKind(TypeDefKind.StringKind), { sourceMap: dag.sourceMap("src/index.ts", 187, 14) }).withArg("baseImageAddress", dag.typeDef().withKind(TypeDefKind.StringKind), { sourceMap: dag.sourceMap("src/index.ts", 187, 28) }))
+  let obj_BiomeProject = dag.typeDef().withObject("BiomeProject", { description: "A Biome project, rooted at a workspace-relative directory holding a root\nBiome configuration.", sourceMap: dag.sourceMap("src/index.ts", 422, 14) })
+  obj_BiomeProject = obj_BiomeProject.withFunction(dag.function_("fix", dag.typeDef().withObject("Changeset")).withDescription("Apply Biome's safe fixes to this project and return the changes.\n\nThe changes are rooted at the caller's working directory, where the CLI\napplies them: a project below it is placed at its relative path, and an\nenclosing project contributes only the working directory's subtree.\nFixes are returned even when diagnostics Biome cannot fix remain.").withSourceMap(dag.sourceMap("src/index.ts", 477, 8)).withArg("ws", dag.typeDef().withObject("Workspace"), { sourceMap: dag.sourceMap("src/index.ts", 478, 3) }).withArg("files", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)).withOptional(true), { description: "Files to fix, relative to the project root.", sourceMap: dag.sourceMap("src/index.ts", 479, 3) }).withArg("fixFilter", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)).withOptional(true), { description: "Patterns, relative to the project root, of files to include in the changeset. Empty includes every file Biome fixed.", sourceMap: dag.sourceMap("src/index.ts", 480, 3) }))
+  obj_BiomeProject = obj_BiomeProject.withFunction(dag.function_("lint", dag.typeDef().withKind(TypeDefKind.VoidKind).withOptional(true)).withDescription("Lint this project.").withSourceMap(dag.sourceMap("src/index.ts", 456, 8)).withArg("ws", dag.typeDef().withObject("Workspace"), { sourceMap: dag.sourceMap("src/index.ts", 456, 13) }).withCheck())
+  obj_BiomeProject = obj_BiomeProject.withField("path", dag.typeDef().withKind(TypeDefKind.StringKind), { description: "Project root, relative to the workspace.", sourceMap: dag.sourceMap("src/index.ts", 427, 2) })
+  obj_BiomeProject = obj_BiomeProject.withConstructor(dag.function_("", obj_BiomeProject).withArg("path", dag.typeDef().withKind(TypeDefKind.StringKind), { sourceMap: dag.sourceMap("src/index.ts", 438, 3) }).withArg("baseImageAddress", dag.typeDef().withKind(TypeDefKind.StringKind), { sourceMap: dag.sourceMap("src/index.ts", 439, 3) }).withArg("packageManager", dag.typeDef().withKind(TypeDefKind.StringKind), { sourceMap: dag.sourceMap("src/index.ts", 440, 3) }).withArg("installFlags", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)), { sourceMap: dag.sourceMap("src/index.ts", 441, 3) }).withArg("environment", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)), { sourceMap: dag.sourceMap("src/index.ts", 442, 3) }))
   mod = mod.withObject(obj_BiomeProject)
-  let obj_BiomeProjects = dag.typeDef().withObject("BiomeProjects", { description: "Biome projects in a workspace, keyed by the directory of their root Biome\nconfiguration.", sourceMap: dag.sourceMap("src/index.ts", 280, 14) }).withCollection().withCollectionGet("project")
-  obj_BiomeProjects = obj_BiomeProjects.withFunction(dag.function_("lint", dag.typeDef().withKind(TypeDefKind.VoidKind).withOptional(true)).withDescription("Lint the selected Biome projects.").withSourceMap(dag.sourceMap("src/index.ts", 307, 8)).withArg("ws", dag.typeDef().withObject("Workspace"), { sourceMap: dag.sourceMap("src/index.ts", 307, 13) }).withCheck())
-  obj_BiomeProjects = obj_BiomeProjects.withFunction(dag.function_("project", dag.typeDef().withObject("BiomeProject")).withDescription("The Biome project rooted at path.").withSourceMap(dag.sourceMap("src/index.ts", 298, 2)).withArg("path", dag.typeDef().withKind(TypeDefKind.StringKind), { sourceMap: dag.sourceMap("src/index.ts", 298, 10) }))
-  obj_BiomeProjects = obj_BiomeProjects.withField("paths", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)), { description: "Project root paths.", sourceMap: dag.sourceMap("src/index.ts", 285, 2) }).withCollectionKeys("paths")
-  obj_BiomeProjects = obj_BiomeProjects.withConstructor(dag.function_("", obj_BiomeProjects).withArg("paths", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)), { sourceMap: dag.sourceMap("src/index.ts", 289, 14) }).withArg("baseImageAddress", dag.typeDef().withKind(TypeDefKind.StringKind), { sourceMap: dag.sourceMap("src/index.ts", 289, 31) }))
+  let obj_BiomeProjects = dag.typeDef().withObject("BiomeProjects", { description: "Biome projects in a workspace, keyed by the directory of their root Biome\nconfiguration.", sourceMap: dag.sourceMap("src/index.ts", 774, 14) }).withCollection().withCollectionGet("project")
+  obj_BiomeProjects = obj_BiomeProjects.withFunction(dag.function_("lint", dag.typeDef().withKind(TypeDefKind.VoidKind).withOptional(true)).withDescription("Lint the selected Biome projects.").withSourceMap(dag.sourceMap("src/index.ts", 822, 8)).withArg("ws", dag.typeDef().withObject("Workspace"), { sourceMap: dag.sourceMap("src/index.ts", 822, 13) }).withCheck())
+  obj_BiomeProjects = obj_BiomeProjects.withFunction(dag.function_("project", dag.typeDef().withObject("BiomeProject")).withDescription("The Biome project rooted at path.").withSourceMap(dag.sourceMap("src/index.ts", 807, 2)).withArg("path", dag.typeDef().withKind(TypeDefKind.StringKind), { sourceMap: dag.sourceMap("src/index.ts", 807, 10) }))
+  obj_BiomeProjects = obj_BiomeProjects.withField("paths", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)), { description: "Project root paths.", sourceMap: dag.sourceMap("src/index.ts", 779, 2) }).withCollectionKeys("paths")
+  obj_BiomeProjects = obj_BiomeProjects.withConstructor(dag.function_("", obj_BiomeProjects).withArg("paths", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)), { sourceMap: dag.sourceMap("src/index.ts", 790, 3) }).withArg("baseImageAddress", dag.typeDef().withKind(TypeDefKind.StringKind), { sourceMap: dag.sourceMap("src/index.ts", 791, 3) }).withArg("packageManager", dag.typeDef().withKind(TypeDefKind.StringKind), { sourceMap: dag.sourceMap("src/index.ts", 792, 3) }).withArg("installFlags", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)), { sourceMap: dag.sourceMap("src/index.ts", 793, 3) }).withArg("environment", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)), { sourceMap: dag.sourceMap("src/index.ts", 794, 3) }))
   mod = mod.withObject(obj_BiomeProjects)
-  let obj_Biomejs = dag.typeDef().withObject("Biomejs", { sourceMap: dag.sourceMap("src/index.ts", 327, 14) })
-  obj_Biomejs = obj_Biomejs.withFunction(dag.function_("projects", dag.typeDef().withObject("BiomeProjects")).withDescription("Biome projects at or below the working directory, keyed by project root.").withSourceMap(dag.sourceMap("src/index.ts", 346, 8)).withArg("ws", dag.typeDef().withObject("Workspace"), { sourceMap: dag.sourceMap("src/index.ts", 346, 17) }))
-  obj_Biomejs = obj_Biomejs.withConstructor(dag.function_("", obj_Biomejs).withArg("baseImageAddress", dag.typeDef().withKind(TypeDefKind.StringKind), { defaultValue: JSON.stringify("node:25-alpine@sha256:f4769ca6eeb6ebbd15eb9c8233afed856e437b75f486f7fccaa81d7c8ad56007") as string & { __JSON: never }, description: "The base image to use.\n\nThis assume biome will run in a node container using npm\nas package manager.", sourceMap: dag.sourceMap("src/index.ts", 337, 3) }))
+  let obj_Biomejs = dag.typeDef().withObject("Biomejs", { sourceMap: dag.sourceMap("src/index.ts", 840, 14) })
+  obj_Biomejs = obj_Biomejs.withFunction(dag.function_("projects", dag.typeDef().withObject("BiomeProjects")).withDescription("Biome projects at or below the working directory, keyed by project root.").withSourceMap(dag.sourceMap("src/index.ts", 879, 8)).withArg("ws", dag.typeDef().withObject("Workspace"), { sourceMap: dag.sourceMap("src/index.ts", 879, 17) }))
+  obj_Biomejs = obj_Biomejs.withConstructor(dag.function_("", obj_Biomejs).withArg("baseImageAddress", dag.typeDef().withKind(TypeDefKind.StringKind), { defaultValue: JSON.stringify("node:25-alpine@sha256:f4769ca6eeb6ebbd15eb9c8233afed856e437b75f486f7fccaa81d7c8ad56007") as string & { __JSON: never }, description: "Base image for Biome containers. It must provide Node.js and npm.", sourceMap: dag.sourceMap("src/index.ts", 853, 3) }).withArg("packageManager", dag.typeDef().withKind(TypeDefKind.StringKind), { defaultValue: JSON.stringify("") as string & { __JSON: never }, description: "Package manager that installs dependencies: npm, yarn, pnpm or bun.\nEmpty detects it from package.json's packageManager field, else the\nlockfile, else npm.", sourceMap: dag.sourceMap("src/index.ts", 859, 3) }).withArg("installFlags", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)).withOptional(true), { description: "Extra arguments for the install command, e.g. [\"--ignore-scripts\"].", sourceMap: dag.sourceMap("src/index.ts", 863, 3) }).withArg("environment", dag.typeDef().withListOf(dag.typeDef().withKind(TypeDefKind.StringKind)).withOptional(true), { description: "Environment variables for Biome, as KEY=VALUE.", sourceMap: dag.sourceMap("src/index.ts", 867, 3) }))
   mod = mod.withObject(obj_Biomejs)
   return await mod.id()
 }
@@ -111,7 +147,10 @@ async function invoke(
         case "": {
           const __arg_path = args["path"] === undefined || args["path"] === null ? args["path"] : args["path"]
           const __arg_baseImageAddress = args["baseImageAddress"] === undefined || args["baseImageAddress"] === null ? args["baseImageAddress"] : args["baseImageAddress"]
-          const __result = await new BiomeProject(__arg_path, __arg_baseImageAddress) as unknown as BiomeProject
+          const __arg_packageManager = args["packageManager"] === undefined || args["packageManager"] === null ? args["packageManager"] : args["packageManager"]
+          const __arg_installFlags = args["installFlags"] === undefined || args["installFlags"] === null ? args["installFlags"] : (args["installFlags"] as any[]).map((__v) => __v)
+          const __arg_environment = args["environment"] === undefined || args["environment"] === null ? args["environment"] : (args["environment"] as any[]).map((__v) => __v)
+          const __result = await new BiomeProject(__arg_path, __arg_baseImageAddress, __arg_packageManager, __arg_installFlags, __arg_environment) as unknown as BiomeProject
           return await serializeBiomeProject(__result)
         }
 
@@ -140,7 +179,10 @@ async function invoke(
         case "": {
           const __arg_paths = args["paths"] === undefined || args["paths"] === null ? args["paths"] : (args["paths"] as any[]).map((__v) => __v)
           const __arg_baseImageAddress = args["baseImageAddress"] === undefined || args["baseImageAddress"] === null ? args["baseImageAddress"] : args["baseImageAddress"]
-          const __result = await new BiomeProjects(__arg_paths, __arg_baseImageAddress) as unknown as BiomeProjects
+          const __arg_packageManager = args["packageManager"] === undefined || args["packageManager"] === null ? args["packageManager"] : args["packageManager"]
+          const __arg_installFlags = args["installFlags"] === undefined || args["installFlags"] === null ? args["installFlags"] : (args["installFlags"] as any[]).map((__v) => __v)
+          const __arg_environment = args["environment"] === undefined || args["environment"] === null ? args["environment"] : (args["environment"] as any[]).map((__v) => __v)
+          const __result = await new BiomeProjects(__arg_paths, __arg_baseImageAddress, __arg_packageManager, __arg_installFlags, __arg_environment) as unknown as BiomeProjects
           return await serializeBiomeProjects(__result)
         }
 
@@ -166,7 +208,10 @@ async function invoke(
 
         case "": {
           const __arg_baseImageAddress = args["baseImageAddress"]
-          const __result = await new Biomejs(__arg_baseImageAddress) as unknown as Biomejs
+          const __arg_packageManager = args["packageManager"]
+          const __arg_installFlags = args["installFlags"] === undefined || args["installFlags"] === null ? args["installFlags"] : (args["installFlags"] as any[]).map((__v) => __v)
+          const __arg_environment = args["environment"] === undefined || args["environment"] === null ? args["environment"] : (args["environment"] as any[]).map((__v) => __v)
+          const __result = await new Biomejs(__arg_baseImageAddress, __arg_packageManager, __arg_installFlags, __arg_environment) as unknown as Biomejs
           return await serializeBiomejs(__result)
         }
 
