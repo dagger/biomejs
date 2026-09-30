@@ -3,6 +3,7 @@
  */
 
 import {
+	CacheSharingMode,
 	type Changeset,
 	type Container,
 	check,
@@ -761,7 +762,10 @@ function nodeBase(image: string, pm: string): Container {
 		.from(image)
 		.withMountedCache("/root/.npm", dag.cacheVolume("npm-cache"))
 		.withEnvVariable("npm_config_cache", "/root/.npm")
-		.withMountedCache("/root/.yarn-cache", dag.cacheVolume("yarn-cache"))
+		// Concurrent yarn 1 installs corrupt a shared cache.
+		.withMountedCache("/root/.yarn-cache", dag.cacheVolume("yarn-cache"), {
+			sharing: CacheSharingMode.Locked,
+		})
 		.withEnvVariable("YARN_CACHE_FOLDER", "/root/.yarn-cache")
 		.withMountedCache("/root/.bun-cache", dag.cacheVolume("bun-cache"))
 		.withEnvVariable("BUN_INSTALL_CACHE_DIR", "/root/.bun-cache")
