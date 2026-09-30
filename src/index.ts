@@ -362,6 +362,26 @@ async function findInstall(
 	return { root: at, packageManager };
 }
 
+/**
+ * Biome's summary of what `check --write` left unfixed, e.g. "Found 1 error.
+ * Skipped 1 suggested fixes (apply with biome check --write --unsafe).", or
+ * "" when it fixed everything.
+ */
+function fixSummary(output: string): string {
+	const lines = output.split("\n").map((l) => l.trim());
+	const found = lines.filter((l) =>
+		/^Found \d+ (errors?|warnings?|infos?)\.$/.test(l),
+	);
+	const skipped = lines.find((l) => /^Skipped \d+ suggested fixes?\.$/.test(l));
+	const parts = [...found];
+	if (skipped) {
+		parts.push(
+			`${skipped.replace(/\.$/, "")} (apply with biome check --write --unsafe).`,
+		);
+	}
+	return parts.join(" ");
+}
+
 /** The last lines of a command's output. */
 function tail(output: string, lines = 15): string {
 	return output.trim().split("\n").slice(-lines).join("\n");
@@ -485,8 +505,13 @@ export class BiomeProject {
 			expect: ReturnType.Any,
 		});
 		const exitCode = await ran.exitCode();
+		const output = `${await ran.stdout()}\n${await ran.stderr()}`;
+		// Say what Biome left for a human: the changeset cannot carry it.
+		const summary = fixSummary(output);
+		if (summary !== "") {
+			console.log(`${this.path}: ${summary}`);
+		}
 		if (exitCode !== 0) {
-			const output = `${await ran.stdout()}\n${await ran.stderr()}`;
 			// Biome exits 1 when diagnostics remain that it could not fix; the
 			// safe fixes it applied are still worth returning.
 			const remaining =
@@ -656,7 +681,8 @@ function specs(value: unknown): string[] {
  * Everything the install reads, relative to the install root, and nothing
  * else, so editing source files does not re-run it. Package managers copy
  * `file:`, `link:` and `portal:` directory dependencies and pnpm's injected
- * workspace packages at install time, so those directories come in whole. If
+ * workspace packages at install time, so those directories come in whole,
+ * and they link workspace packages' `bin` files, so those come too. If
  * a package.json does not parse, the install gets the full source instead.
  */
 async function installInputs(ws: Workspace, root: string): Promise<Directory> {
@@ -690,8 +716,14 @@ async function installInputs(ws: Workspace, root: string): Promise<Directory> {
 		if (m && typeof m.pkg?.name === "string") byName.set(m.pkg.name, m.dir);
 	}
 	const local = new Set<string>();
+	const bins = new Set<string>();
 	for (const m of manifests) {
 		if (!m) continue;
+		// Package managers link workspace packages' bin files at install time.
+		for (const bin of specs(m.pkg?.bin)) {
+			const file = within(m.dir, bin);
+			if (file !== null && file !== ".") bins.add(file);
+		}
 		const fields = DEPENDENCY_FIELDS.flatMap((f) => [
 			m.pkg?.[f],
 			m.pkg?.pnpm?.[f],
@@ -708,9 +740,10 @@ async function installInputs(ws: Workspace, root: string): Promise<Directory> {
 			}
 		}
 	}
-	const extra = [...local]
-		.filter((p) => p !== ".")
-		.flatMap((p) => [p, `${p}/**`]);
+	const extra = [
+		...[...local].filter((p) => p !== ".").flatMap((p) => [p, `${p}/**`]),
+		...bins,
+	];
 	return ws.directory(absPath(root), {
 		include: [...INSTALL_INPUTS, ...extra],
 		exclude: ["**/node_modules"],
