@@ -102610,14 +102610,6 @@ class Artifacts extends BaseClient {
     const response = await ctx.execute();
     return response;
   };
-  filterAgentCommand = () => {
-    const ctx = this._ctx.select("filterAgentCommand");
-    return new Artifacts(ctx);
-  };
-  filterCheckCommand = (opts) => {
-    const ctx = this._ctx.select("filterCheckCommand", { ...opts });
-    return new Artifacts(ctx);
-  };
   filterDimensionKeys = (dimension, keys) => {
     const ctx = this._ctx.select("filterDimensionKeys", { dimension, keys });
     return new Artifacts(ctx);
@@ -102628,10 +102620,6 @@ class Artifacts extends BaseClient {
   };
   filterDirectives = (directives, opts) => {
     const ctx = this._ctx.select("filterDirectives", { directives, ...opts });
-    return new Artifacts(ctx);
-  };
-  filterGenerateCommand = () => {
-    const ctx = this._ctx.select("filterGenerateCommand");
     return new Artifacts(ctx);
   };
   filterParentDirectives = (directives, opts) => {
@@ -102652,10 +102640,6 @@ class Artifacts extends BaseClient {
   };
   filterTypes = (types, opts) => {
     const ctx = this._ctx.select("filterTypes", { types, ...opts });
-    return new Artifacts(ctx);
-  };
-  filterUpCommand = () => {
-    const ctx = this._ctx.select("filterUpCommand");
     return new Artifacts(ctx);
   };
   filterUri = (uri) => {
@@ -103389,6 +103373,10 @@ class Container extends BaseClient {
   };
   withFiles = (path, sources, opts) => {
     const ctx = this._ctx.select("withFiles", { path, sources, ...opts });
+    return new Container(ctx);
+  };
+  withGPU = () => {
+    const ctx = this._ctx.select("withGPU");
     return new Container(ctx);
   };
   withLabel = (name, value) => {
@@ -105861,27 +105849,23 @@ class LLM extends BaseClient {
   _id = undefined;
   _contextTokens = undefined;
   _contextWindow = undefined;
-  _emitHistory = undefined;
   _hasPending = undefined;
   _lastReply = undefined;
   _model = undefined;
-  _portableID = undefined;
   _provider = undefined;
   _reasoningEffort = undefined;
   _spawn = undefined;
   _sync = undefined;
   _tools = undefined;
   _transcript = undefined;
-  constructor(ctx, _id, _contextTokens, _contextWindow, _emitHistory, _hasPending, _lastReply, _model, _portableID, _provider, _reasoningEffort, _spawn, _sync, _tools, _transcript) {
+  constructor(ctx, _id, _contextTokens, _contextWindow, _hasPending, _lastReply, _model, _provider, _reasoningEffort, _spawn, _sync, _tools, _transcript) {
     super(ctx);
     this._id = _id;
     this._contextTokens = _contextTokens;
     this._contextWindow = _contextWindow;
-    this._emitHistory = _emitHistory;
     this._hasPending = _hasPending;
     this._lastReply = _lastReply;
     this._model = _model;
-    this._portableID = _portableID;
     this._provider = _provider;
     this._reasoningEffort = _reasoningEffort;
     this._spawn = _spawn;
@@ -105921,11 +105905,6 @@ class LLM extends BaseClient {
     const response = await ctx.execute();
     return response;
   };
-  emitHistory = async () => {
-    const ctx = this._ctx.select("emitHistory");
-    const response = await ctx.execute();
-    return new LLM(ctx.copy().selectNode(response, "LLM"));
-  };
   fork = (label) => {
     const ctx = this._ctx.select("fork", { label });
     return new LLM(ctx);
@@ -105960,14 +105939,6 @@ class LLM extends BaseClient {
       return this._model;
     }
     const ctx = this._ctx.select("model");
-    const response = await ctx.execute();
-    return response;
-  };
-  portableID = async () => {
-    if (this._portableID) {
-      return this._portableID;
-    }
-    const ctx = this._ctx.select("portableID");
     const response = await ctx.execute();
     return response;
   };
@@ -107162,13 +107133,15 @@ class Client extends BaseClient {
   _currentTimestamp = undefined;
   _defaultPlatform = undefined;
   _serveModule = undefined;
+  _setSessionTitle = undefined;
   _version = undefined;
-  constructor(ctx, _id, _currentTimestamp, _defaultPlatform, _serveModule, _version) {
+  constructor(ctx, _id, _currentTimestamp, _defaultPlatform, _serveModule, _setSessionTitle, _version) {
     super(ctx);
     this._id = _id;
     this._currentTimestamp = _currentTimestamp;
     this._defaultPlatform = _defaultPlatform;
     this._serveModule = _serveModule;
+    this._setSessionTitle = _setSessionTitle;
     this._version = _version;
   }
   getGQLClient() {
@@ -107323,6 +107296,10 @@ class Client extends BaseClient {
   setSecret = (name, plaintext) => {
     const ctx = this._ctx.select("setSecret", { name, plaintext });
     return new Secret(ctx);
+  };
+  setSessionTitle = async (title) => {
+    const ctx = this._ctx.select("setSessionTitle", { title });
+    await ctx.execute();
   };
   sourceMap = (filename, line, column) => {
     const ctx = this._ctx.select("sourceMap", { filename, line, column });
