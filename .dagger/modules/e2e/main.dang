@@ -307,6 +307,20 @@ type E2e {
       .withNewFile("index.js", "export const x = 1;\n")
       .asWorkspace
     run(biomejs.projects(standalone).get(key: ".").lint(standalone))
+
+    # npx must run Biome, not find the module's own wrapper and recurse: an
+    # unformatted file fails with Biome's report.
+    let unformatted = directory
+      .withNewFile("biome.json", "{}\n")
+      .withNewFile("index.js", "const  x=1;\nexport { x };\n")
+      .asWorkspace
+    let report = failure(
+      biomejs.projects(unformatted).get(key: ".").lint(unformatted),
+    )
+    assert(
+      report.contains("biome check failed (exit 1)") and report.contains("index.js format"),
+      "the npx fallback did not lint: " + report,
+    )
     null
   }
 }

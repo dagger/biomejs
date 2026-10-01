@@ -99,6 +99,12 @@ exit 127
 /** The pnpm store, on a cache volume. */
 const PNPM_STORE = "/root/.pnpm-store";
 
+/**
+ * The biome wrapper, off PATH and always called by this path, so that npx,
+ * yarn or pnpm resolving `biome` can never find the wrapper itself.
+ */
+const BIOME = "/opt/dagger-biomejs/biome";
+
 /** Exit status of the biome wrapper when the project does not install Biome. */
 const NOT_INSTALLED = 127;
 
@@ -478,7 +484,7 @@ export class BiomeProject {
 	async lint(ws: Workspace): Promise<void> {
 		const { ctr } = await this.runner(ws, await this.nestedRoots(ws));
 		try {
-			await ctr.withExec(["biome", "check"]).sync();
+			await ctr.withExec([BIOME, "check"]).sync();
 		} catch (err) {
 			throw stepError("biome check", err);
 		}
@@ -503,7 +509,7 @@ export class BiomeProject {
 	): Promise<Changeset> {
 		const nested = await this.nestedRoots(ws);
 		const { ctr, source, mount } = await this.runner(ws, nested);
-		const ran = ctr.withExec(["biome", "check", "--write", ...files], {
+		const ran = ctr.withExec([BIOME, "check", "--write", ...files], {
 			expect: ReturnType.Any,
 		});
 		const exitCode = await ran.exitCode();
@@ -582,13 +588,13 @@ export class BiomeProject {
 		let ctr: Container;
 		if (install === null) {
 			ctr = nodeBase(this.baseImageAddress, "npm").withNewFile(
-				"/usr/local/bin/biome",
+				BIOME,
 				'#!/bin/sh\nexec npx --yes @biomejs/biome "$@"\n',
 				{ permissions: 0o755 },
 			);
 		} else {
 			ctr = (await this.installed(ws, install)).withNewFile(
-				"/usr/local/bin/biome",
+				BIOME,
 				biomeWrapper(install.root),
 				{ permissions: 0o755 },
 			);
