@@ -42,7 +42,10 @@ export class Biomejs {
 	 */
 	@func()
 	async path(): Promise<string> {
-		return this.ws.path();
+		// Workspace.cwd is absolute from the workspace root ("/", "/sub"); keep
+		// returning a root-relative path ("." or "sub") as before.
+		const cwd = (await this.ws.cwd()).replace(/^\/+/, "");
+		return cwd === "" ? "." : cwd;
 	}
 
 	/**
