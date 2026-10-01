@@ -1,0 +1,326 @@
+"""
+End-to-end checks for the biomejs toolchain.
+
+The fixtures are built in code rather than kept in the repository: the
+repository installs biomejs in its own workspace, so a failing fixture on disk
+would fail its own `dagger check`.
+"""
+type E2e {
+  let biomeVersion: String! = "2.5.14"
+
+  let assert(condition: Boolean!, message: String!): Void {
+    if (condition == false) { raise message }
+    null
+  }
+
+  """
+  Run a check, raising its failure. A check called through a dependency comes
+  back as a Check that has not run.
+  """
+  let run(check: Check!): Void {
+    # Check.error is not null for a passing check when read from Dang, so ask
+    # pass first and read the message only on failure.
+    if (check.pass == false) {
+      raise check.error.message ?? "check failed"
+    }
+    null
+  }
+
+  """
+  The failure message of a check that should fail.
+  """
+  let failure(check: Check!): String! {
+    { run(check); "unexpected success" } rescue {
+      err: Error => err.message
+    }
+  }
+
+  let changed(changes: Changeset!): [String!]! {
+    changes.addedPaths + changes.modifiedPaths + changes.removedPaths
+  }
+
+  """
+  An npm workspace root that installs Biome, holding:
+
+  - clean: a clean project, with a `"root": false` configuration in sub/ that
+    belongs to it, and a nested root project, clean/nested, that fails. clean
+    passes only if it leaves clean/nested alone.
+  - failing: fixable formatting in JavaScript and JSON, plus a debugger
+    statement Biome has no safe fix for.
+  - temp: a project in a gitignored directory.
+  """
+  let fixture: Workspace! {
+    directory
+      .withNewFile(
+        "package.json",
+        "{ \"private\": true, \"devDependencies\": { \"@biomejs/biome\": \"" + biomeVersion + "\" } }\n",
+      )
+      .withNewFile(".gitignore", "temp/\n")
+      .withNewFile("clean/biome.json", "{}\n")
+      .withNewFile("clean/index.js", "export const answer = 42;\n")
+      .withNewFile("clean/sub/biome.jsonc", "// Belongs to the clean project.\n{ \"root\": false }\n")
+      .withNewFile("clean/sub/util.js", "export const half = 21;\n")
+      .withNewFile("clean/nested/biome.json", "{}\n")
+      .withNewFile("clean/nested/index.js", "debugger;\n")
+      .withNewFile("failing/biome.json", "{}\n")
+      .withNewFile("failing/index.js", "const  a=1;\nexport { a };\n")
+      .withNewFile("failing/data.json", "{\"a\":1,\n\"b\":  2}\n")
+      .withNewFile("failing/debug.js", "debugger;\n")
+      .withNewFile("temp/biome.json", "{}\n")
+      .asWorkspace
+  }
+
+  """
+  A pnpm workspace that pins Biome at its root, with a nested root project in
+  packages/a. The root depends on packages/a, and packages/a on packages/b,
+  through `workspace:*`, which npm cannot install. It has no
+  lockfile, so --frozen-lockfile makes its install fail.
+  """
+  let pnpmFixture: Workspace! {
+    let jsOnly = "{ \"files\": { \"includes\": [\"**/*.js\"] } }\n"
+    directory
+      .withNewFile(
+        "package.json",
+        "{ \"name\": \"fx\", \"private\": true, \"packageManager\": \"pnpm@10.25.0\", \"dependencies\": { \"a\": \"workspace:*\" }, \"devDependencies\": { \"@biomejs/biome\": \"" + biomeVersion + "\" } }\n",
+      )
+      .withNewFile("pnpm-workspace.yaml", "packages:\n  - \"packages/*\"\n")
+      .withNewFile("biome.json", jsOnly)
+      .withNewFile("index.js", "export const root = 0;\n")
+      .withNewFile(
+        "packages/a/package.json",
+        "{ \"name\": \"a\", \"version\": \"1.0.0\", \"dependencies\": { \"b\": \"workspace:*\" } }\n",
+      )
+      .withNewFile("packages/a/biome.json", jsOnly)
+      .withNewFile("packages/a/index.js", "export const a = 1;\n")
+      .withNewFile("packages/b/package.json", "{ \"name\": \"b\", \"version\": \"1.0.0\" }\n")
+      .withNewFile("packages/b/index.js", "export const b = 2;\n")
+      .asWorkspace
+  }
+
+  """
+  Projects are keyed by the directories of root Biome configurations at or
+  below the working directory, plus the enclosing one, as workspace-root
+  paths. A `"root": false` configuration folds into its root project, and
+  gitignored directories are skipped.
+  """
+  keysCheck(ws: Workspace!): Void @check {
+    let fx = fixture
+    let keys = biomejs.projects(fx).keys
+    assert(keys == ["clean", "clean/nested", "failing"], "projects from the root: " + keys.join(", "))
+
+    let fromClean = biomejs.projects(fx.withWorkdir("clean")).keys
+    assert(fromClean == ["clean", "clean/nested"], "projects from a project root: " + fromClean.join(", "))
+
+    # sub holds a "root": false configuration: it belongs to clean.
+    let fromSub = biomejs.projects(fx.withWorkdir("clean/sub")).keys
+    assert(fromSub == ["clean"], "projects from a root: false directory: " + fromSub.join(", "))
+
+    let fromNested = biomejs.projects(fx.withWorkdir("clean/nested")).keys
+    assert(fromNested == ["clean/nested"], "projects from a nested root: " + fromNested.join(", "))
+
+    let pnpm = biomejs.projects(pnpmFixture).keys
+    assert(pnpm == [".", "packages/a"], "pnpm projects: " + pnpm.join(", "))
+    let fromPackage = biomejs.projects(pnpmFixture.withWorkdir("packages/b")).keys
+    assert(fromPackage == ["."], "projects from a package without a config: " + fromPackage.join(", "))
+
+    let own = biomejs.projects(ws).keys
+    assert(own == ["."], "projects in this repository: " + own.join(", "))
+    null
+  }
+
+  """
+  get and list build the projects at their keys; subset keeps parent order,
+  rejects unknown and duplicate keys, and narrows what get accepts and what
+  the batch runs.
+  """
+  collectionCheck: Void @check {
+    let fx = fixture
+    let projects = biomejs.projects(fx)
+    assert(projects.get(key: "clean/nested").path == "clean/nested", "get did not return the project at its key")
+    assert(
+      projects.list.{{path}}.map { p => p.path } == projects.keys,
+      "list did not return one project per key, in key order",
+    )
+
+    let pair = projects.subset(keys: ["failing", "clean"])
+    assert(pair.keys == ["clean", "failing"], "subset did not keep parent order: " + pair.keys.join(", "))
+    let outside = { pair.get(key: "clean/nested").path } rescue {
+      err: Error => "rejected"
+    }
+    assert(outside == "rejected", "get accepted a key outside the subset")
+
+    let unknown = { projects.subset(keys: ["no/such/project"]).keys.join(","); "accepted" } rescue {
+      err: Error => "rejected"
+    }
+    assert(unknown == "rejected", "subset accepted an unknown key")
+    let duplicate = { projects.subset(keys: ["clean", "clean"]).keys.join(","); "accepted" } rescue {
+      err: Error => "rejected"
+    }
+    assert(duplicate == "rejected", "subset accepted a duplicate key")
+
+    # The failing projects are in the collection but outside the subset.
+    run(projects.subset(keys: ["clean"]).batch.lint(fx))
+    run(projects.subset(keys: []).batch.lint(fx))
+    null
+  }
+
+  """
+  A clean project passes on its own, below a workspace-root install: Biome
+  runs in the project, not in /src/src, and leaves the nested root project,
+  which fails on its own, alone. The batch names exactly the failing projects
+  and the step that failed.
+  """
+  lintCheck: Void @check {
+    let fx = fixture
+    let projects = biomejs.projects(fx)
+    run(projects.get(key: "clean").lint(fx))
+
+    let nested = failure(projects.get(key: "clean/nested").lint(fx))
+    assert(nested.contains("biome check failed (exit 1)"), "the nested root project passed: " + nested)
+
+    let batch = failure(projects.batch.lint(fx))
+    assert(batch.contains("- failing: biome check failed (exit 1)"), "the batch did not name failing: " + batch)
+    assert(batch.contains("- clean/nested: biome check failed"), "the batch did not name clean/nested: " + batch)
+    assert(batch.contains("- clean:") == false, "the batch blamed the clean project: " + batch)
+    null
+  }
+
+  """
+  fix returns Biome's safe fixes, for JSON as well as JavaScript, even though
+  a diagnostic without a safe fix remains, and nothing from the install. The
+  changes are rooted at the caller's working directory.
+  """
+  fixCheck: Void @check {
+    let fx = fixture
+    let changes = biomejs.projects(fx).get(key: "failing").fix(fx)
+    assert(
+      changes.modifiedPaths == ["failing/data.json", "failing/index.js"],
+      "fix changed: " + changed(changes).join(", "),
+    )
+    assert(
+      changes.addedPaths.length == 0 and changes.removedPaths.length == 0,
+      "fix added or removed files: " + changed(changes).join(", "),
+    )
+    let fixed = changes.after.file("failing/index.js").contents
+    assert(fixed.contains("const a = 1;"), "fixed index.js: " + fixed)
+    let json = changes.after.file("failing/data.json").contents
+    assert(json == "{ \"a\": 1, \"b\": 2 }\n", "fixed data.json: " + json)
+
+    let jsonOnly = biomejs.projects(fx).get(key: "failing").fix(fx, fixFilter: ["*.json"])
+    assert(changed(jsonOnly) == ["failing/data.json"], "fixFilter kept: " + changed(jsonOnly).join(", "))
+
+    let inside = fx.withWorkdir("failing")
+    let local = biomejs.projects(inside).get(key: "failing").fix(inside)
+    assert(
+      changed(local) == ["data.json", "index.js"],
+      "fix from inside the project changed: " + changed(local).join(", "),
+    )
+
+    let clean = biomejs.projects(fx).get(key: "clean").fix(fx)
+    assert(clean.isEmpty, "fixing the clean project changed: " + changed(clean).join(", "))
+
+    # The project at the install root: the install's node_modules and
+    # lockfile stay out of the changes.
+    let pnpm = pnpmFixture
+    let root = biomejs.projects(pnpm).get(key: ".").fix(pnpm)
+    assert(root.isEmpty, "fixing the install root changed: " + changed(root).join(", "))
+    null
+  }
+
+  """
+  Dependencies install at the workspace root with the package manager its
+  package.json names, so `workspace:*` resolves, and a nested project uses
+  the Biome pinned there. Install flags reach the install, an explicit
+  package manager wins, and a failed install names its command.
+  """
+  installCheck: Void @check {
+    let pnpm = pnpmFixture
+    run(biomejs.projects(pnpm).batch.lint(pnpm))
+
+    # Without a lockfile, pnpm refuses a frozen install.
+    let frozen = biomejs(installFlags: ["--frozen-lockfile"]).projects(pnpm)
+    let one = failure(frozen.get(key: "packages/a").lint(pnpm))
+    assert(
+      one.contains("install failed (pnpm install --frozen-lockfile"),
+      "the install flags did not reach pnpm: " + one,
+    )
+    let batch = failure(frozen.batch.lint(pnpm))
+    assert(
+      batch.contains("- .: install failed") and batch.contains("- packages/a: install failed"),
+      "the batch did not name each project's failed install: " + batch,
+    )
+
+    let npm = failure(
+      biomejs(packageManager: "npm").projects(pnpm).get(key: "packages/a").lint(pnpm),
+    )
+    assert(npm.contains("install failed (npm install, exit"), "an explicit npm was not used: " + npm)
+    null
+  }
+
+  """
+  `file:` dependencies are installed whole, not just their package.json: the
+  project extends a Biome configuration from one, which turns off the rule
+  its code breaks.
+  """
+  localDependencyCheck: Void @check {
+    let fx = directory
+      .withNewFile(
+        "package.json",
+        "{ \"name\": \"filedep\", \"private\": true, \"packageManager\": \"pnpm@10.25.0\", \"devDependencies\": { \"@biomejs/biome\": \"" + biomeVersion + "\", \"shared-config\": \"file:./shared-config\" } }\n",
+      )
+      .withNewFile(
+        "shared-config/package.json",
+        "{ \"name\": \"shared-config\", \"version\": \"1.0.0\", \"exports\": { \"./biome\": \"./base.json\" } }\n",
+      )
+      .withNewFile(
+        "shared-config/base.json",
+        "{ \"linter\": { \"rules\": { \"suspicious\": { \"noDebugger\": \"off\" } } } }\n",
+      )
+      .withNewFile("app/biome.json", "{ \"extends\": [\"shared-config/biome\"] }\n")
+      .withNewFile("app/index.js", "debugger;\n")
+      .asWorkspace
+    assert(biomejs.projects(fx).keys == ["app"], "file: dependency projects: " + biomejs.projects(fx).keys.join(", "))
+    run(biomejs.projects(fx).get(key: "app").lint(fx))
+    null
+  }
+
+  """
+  A project with a package.json must install Biome itself; one without any
+  package.json falls back to npx.
+  """
+  biomeSourceCheck: Void @check {
+    let missing = directory
+      .withNewFile("package.json", "{ \"private\": true }\n")
+      .withNewFile("biome.json", "{}\n")
+      .withNewFile("index.js", "export const x = 1;\n")
+      .asWorkspace
+    let notInstalled = failure(
+      biomejs.projects(missing).get(key: ".").lint(missing),
+    )
+    assert(
+      notInstalled.contains("biome is not installed: add @biomejs/biome to the devDependencies of package.json"),
+      "a project without Biome did not fail clearly: " + notInstalled,
+    )
+
+    let standalone = directory
+      .withNewFile("biome.json", "{}\n")
+      .withNewFile("index.js", "export const x = 1;\n")
+      .asWorkspace
+    run(biomejs.projects(standalone).get(key: ".").lint(standalone))
+
+    # npx must run Biome, not find the module's own wrapper and recurse: an
+    # unformatted file fails with Biome's report.
+    let unformatted = directory
+      .withNewFile("biome.json", "{}\n")
+      .withNewFile("index.js", "const  x=1;\nexport { x };\n")
+      .asWorkspace
+    let report = failure(
+      biomejs.projects(unformatted).get(key: ".").lint(unformatted),
+    )
+    assert(
+      report.contains("biome check failed (exit 1)") and report.contains("index.js format"),
+      "the npx fallback did not lint: " + report,
+    )
+    null
+  }
+}

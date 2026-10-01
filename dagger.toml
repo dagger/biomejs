@@ -4,10 +4,16 @@
 [modules.biomejs]
 source = "."
 
+[modules.e2e]
+source = ".dagger/modules/e2e"
+
 [modules.dagger-typescript-sdk]
-source = "github.com/dagger/typescript-sdk@main"
+source = "github.com/dagger/typescript-sdk@collections"
 # Marker filename that skips generate when found at or above a TypeScript SDK module root.
 # settings.skipGenerateFilename = ""
+
+[modules.dagger-dang-sdk]
+source = "github.com/dagger/dang-sdk@collections"
 
 [sdks.typescript]
 module = "dagger-typescript-sdk"
@@ -15,3 +21,10 @@ module = "dagger-typescript-sdk"
 [sdks.typescript.scopes."."]
 is-module = true
 name = "biomejs"
+
+[sdks.dang]
+module = "dagger-dang-sdk"
+
+[sdks.dang.scopes.".dagger/modules/e2e"]
+clients = ["./."]
+is-module = true
