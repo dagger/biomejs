@@ -90,6 +90,9 @@ const __classes: Record<string, any> = {
   "WorkspaceModuleSetting": __core.WorkspaceModuleSetting,
   "WorkspaceSDK": __core.WorkspaceSDK,
   "Biomejs": __modBiomejs.Biomejs,
+  "BiomejsBiomeProject": __modBiomejs.BiomejsBiomeProject,
+  "BiomejsBiomeProjects": __modBiomejs.BiomejsBiomeProjects,
+  "BiomejsBiomeProjects_Batch": __modBiomejs.BiomejsBiomeProjects_Batch,
 }
 
 // Load a core object from its ID via node(id:) and wrap it in the matching
