@@ -177,7 +177,7 @@ dagger settings -u biomejs installFlags      # unset, back to the default
 
 ```toml
 [modules.biomejs.settings]
-baseImageAddress = "node:22-alpine"      # default: node:25-alpine; any image with node and npm
+baseImageAddress = "node:22-slim"        # default: node:24-slim; any image with node and npm
 packageManager = "pnpm"                  # default: "" (detect); npm, yarn, pnpm or bun
 installFlags = ["--ignore-scripts"]      # default: []; appended to the install command
 environment = ["BIOME_CONFIG_PATH=config/biome.json"]  # default: []; KEY=VALUE for Biome

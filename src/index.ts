@@ -18,8 +18,12 @@ import {
 	type Workspace,
 } from "@dagger.io/dagger";
 
+/**
+ * Debian rather than Alpine: Biome's musl build, the one an Alpine image
+ * installs, runs many times slower than its glibc build on large projects.
+ */
 const DEFAULT_BASE_IMAGE =
-	"node:25-alpine@sha256:f4769ca6eeb6ebbd15eb9c8233afed856e437b75f486f7fccaa81d7c8ad56007";
+	"node:24-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20";
 
 /** Biome configuration file names, in the order Biome prefers them. */
 const CONFIG_FILES = ["biome.json", "biome.jsonc"];
