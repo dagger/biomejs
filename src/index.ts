@@ -462,18 +462,22 @@ export class BiomeProject {
 
 	environment: string[];
 
+	errorOnWarnings: boolean;
+
 	constructor(
 		path: string,
 		baseImageAddress: string,
 		packageManager: string,
 		installFlags: string[],
 		environment: string[],
+		errorOnWarnings: boolean = false,
 	) {
 		this.path = path;
 		this.baseImageAddress = baseImageAddress;
 		this.packageManager = packageManager;
 		this.installFlags = installFlags;
 		this.environment = environment;
+		this.errorOnWarnings = errorOnWarnings;
 	}
 
 	/**
@@ -484,7 +488,13 @@ export class BiomeProject {
 	async lint(ws: Workspace): Promise<void> {
 		const { ctr } = await this.runner(ws, await this.nestedRoots(ws));
 		try {
-			await ctr.withExec([BIOME, "check"]).sync();
+			await ctr
+				.withExec([
+					BIOME,
+					"check",
+					...(this.errorOnWarnings ? ["--error-on-warnings"] : []),
+				])
+				.sync();
 		} catch (err) {
 			throw stepError("biome check", err);
 		}
@@ -830,18 +840,22 @@ export class BiomeProjects {
 
 	environment: string[];
 
+	errorOnWarnings: boolean;
+
 	constructor(
 		paths: string[],
 		baseImageAddress: string,
 		packageManager: string,
 		installFlags: string[],
 		environment: string[],
+		errorOnWarnings: boolean = false,
 	) {
 		this.paths = paths;
 		this.baseImageAddress = baseImageAddress;
 		this.packageManager = packageManager;
 		this.installFlags = installFlags;
 		this.environment = environment;
+		this.errorOnWarnings = errorOnWarnings;
 	}
 
 	/**
@@ -855,6 +869,7 @@ export class BiomeProjects {
 			this.packageManager,
 			this.installFlags,
 			this.environment,
+			this.errorOnWarnings,
 		);
 	}
 
@@ -890,6 +905,8 @@ export class Biomejs {
 
 	environment: string[];
 
+	errorOnWarnings: boolean;
+
 	constructor(
 		/**
 		 * Base image for Biome containers. It must provide Node.js and npm.
@@ -909,11 +926,16 @@ export class Biomejs {
 		 * Environment variables for Biome, as KEY=VALUE.
 		 */
 		environment: string[] = [],
+		/**
+		 * Fail lint checks when Biome reports warnings. Does not affect fix.
+		 */
+		errorOnWarnings: boolean = false,
 	) {
 		this.baseImageAddress = baseImageAddress;
 		this.packageManager = packageManager;
 		this.installFlags = installFlags;
 		this.environment = environment;
+		this.errorOnWarnings = errorOnWarnings;
 	}
 
 	/**
@@ -927,6 +949,7 @@ export class Biomejs {
 			this.packageManager,
 			this.installFlags,
 			this.environment,
+			this.errorOnWarnings,
 		);
 	}
 }

@@ -186,6 +186,45 @@ type E2e {
   }
 
   """
+  Warnings pass by default and fail when errorOnWarnings is enabled, for
+  individual and batch checks. The setting does not enable writes or affect fix.
+  """
+  warningsCheck: Void @check {
+    let fx = fixture.directory("/")
+      .withNewFile("warning/biome.json", "{ \"linter\": { \"rules\": { \"suspicious\": { \"noDebugger\": \"warn\" } } } }\n")
+      .withNewFile("warning/index.js", "debugger;\n")
+      .withNewFile("formatting/biome.json", "{}\n")
+      .withNewFile("formatting/index.js", "export const x=1;\n")
+      .asWorkspace
+    let relaxed = biomejs(errorOnWarnings: false).projects(fx)
+    let strict = biomejs(errorOnWarnings: true).projects(fx)
+    run(biomejs.projects(fx).get(key: "warning").lint(fx))
+    run(relaxed.get(key: "warning").lint(fx))
+    run(strict.get(key: "clean").lint(fx))
+
+    let warning = failure(strict.get(key: "warning").lint(fx))
+    assert(warning.contains("warnings were emitted"), "strict warnings passed: " + warning)
+    let error = failure(strict.get(key: "clean/nested").lint(fx))
+    assert(error.contains("biome check failed (exit 1)"), "strict errors passed: " + error)
+    # A formatting-only failure would pass if lint accidentally enabled writes.
+    let formatting = failure(strict.get(key: "formatting").lint(fx))
+    assert(formatting.contains("biome check failed (exit 1)"), "strict lint applied fixes: " + formatting)
+
+    run(relaxed.subset(keys: ["clean", "warning"]).batch.lint(fx))
+    let batch = failure(strict.subset(keys: ["clean", "warning"]).batch.lint(fx))
+    assert(batch.contains("- warning: biome check failed (exit 1)"), "batch lost warning policy: " + batch)
+    assert(batch.contains("- clean:") == false, "batch blamed the clean project: " + batch)
+
+    let messy = fx.directory("/")
+      .withNewFile("warning/index.js", "debugger ;\n")
+      .asWorkspace
+    let fixes = biomejs(errorOnWarnings: true).projects(messy).get(key: "warning").fix(messy)
+    assert(changed(fixes) == ["warning/index.js"], "fix changed: " + changed(fixes).join(", "))
+    assert(fixes.after.file("warning/index.js").contents == "debugger;\n", "fix applied an unsafe fix")
+    null
+  }
+
+  """
   fix returns Biome's safe fixes, for JSON as well as JavaScript, even though
   a diagnostic without a safe fix remains, and nothing from the install. The
   changes are rooted at the caller's working directory.

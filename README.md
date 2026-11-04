@@ -181,7 +181,12 @@ baseImageAddress = "node:22-alpine"      # default: node:25-alpine; any image wi
 packageManager = "pnpm"                  # default: "" (detect); npm, yarn, pnpm or bun
 installFlags = ["--ignore-scripts"]      # default: []; appended to the install command
 environment = ["BIOME_CONFIG_PATH=config/biome.json"]  # default: []; KEY=VALUE for Biome
+errorOnWarnings = true                  # default: false; fail lint checks on warnings
 ```
+
+`errorOnWarnings` adds `--error-on-warnings` to individual and batch `lint`
+checks. It does not affect `fix`. Rules and their severities remain in the
+project's Biome configuration.
 
 ## Use from another module
 
