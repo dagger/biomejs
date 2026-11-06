@@ -9,5 +9,6 @@
 ["","git-sha",["github.com/dagger/sdk-helpers","refs/tags/v1.0.5"],"2d593321b19e3519584b1bbd6e77d83b2be9de2f"]
 ["","git-sha",["github.com/dagger/typescript-sdk","collections"],"b2f5e2ec4556d7d31359a81e16d91974be9e006f"]
 ["","git-sha",["github.com/dagger/typescript-sdk","refs/tags/v1"],"0763be8f6c49494563172306ef64a4d61556e2b9"]
+["","oci-sha",["docker.io/library/alpine:3.23"],"sha256:f3d55900449227ae9e237ede521e7b665d53a253b42065ba90b9db9275e198ad"]
 ["","oci-sha",["docker.io/library/golang:1.25-alpine"],"sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59"]
 ["","vanity-url",["https://dagger.io/sdk/helpers"],"https://github.com/dagger/sdk-helpers"]
