@@ -39,6 +39,10 @@ type E2e {
     changes.addedPaths + changes.modifiedPaths + changes.removedPaths
   }
 
+  let projectFiles(ws: Workspace!, project: String!): [String!]! {
+    biomejs.projects(ws).get(key: project).files(ws).keys
+  }
+
   """
   An npm workspace root that installs Biome, holding:
 
@@ -125,13 +129,107 @@ type E2e {
 
     let own = biomejs.projects(ws).keys
     assert(own == ["."], "projects in this repository: " + own.join(", "))
+
+    # Files are keyed by workspace path. A `"root": false` configuration is a
+    # file of its project; a nested root project's files are its own.
+    let clean = projectFiles(fx, "clean")
+    assert(
+      clean == ["clean/biome.json", "clean/index.js", "clean/sub/biome.jsonc", "clean/sub/util.js"],
+      "files of clean: " + clean.join(", "),
+    )
+    let failing = projectFiles(fx, "failing")
+    assert(
+      failing == ["failing/biome.json", "failing/data.json", "failing/debug.js", "failing/index.js"],
+      "files of failing: " + failing.join(", "),
+    )
+    let ownFiles = projectFiles(ws, ".")
+    assert(
+      ownFiles.contains("src/index.ts") and ownFiles.contains("__dagger.entrypoint.ts") == false,
+      "files of this repository: " + ownFiles.join(", "),
+    )
+    null
+  }
+
+  """
+  A project with files Biome handles and leaves out: an excluded directory,
+  excluded patterns, a nested configuration with its own files.includes and
+  one that inherits the root's, a file another tool owns, an unknown file
+  type, and an upper-case extension Biome handles anyway. Every file listed
+  is clean; every file left out fails if Biome checks it.
+  """
+  let discoveryFixture: Directory! {
+    directory
+      .withNewFile("package.json", "{\n\t\"private\": true,\n\t\"devDependencies\": {\n\t\t\"@biomejs/biome\": \"" + biomeVersion + "\"\n\t}\n}\n")
+      .withNewFile("biome.json", "{\n\t\"files\": { \"includes\": [\"**\", \"!dist\", \"!**/*.gen.ts\", \"!**/legacy/*.js\"] }\n}\n")
+      .withNewFile("index.ts", "export const x = 1;\n")
+      .withNewFile("Upper.JS", "export const up = 1;\n")
+      .withNewFile("notes.md", "# notes\n")
+      .withNewFile("data.json", "{}\n")
+      .withNewFile("vendor/package-lock.json", "{}\n")
+      .withNewFile("dist/out.js", "debugger;\n")
+      .withNewFile("api.gen.ts", "debugger;\n")
+      .withNewFile("legacy/old.js", "debugger;\n")
+      .withNewFile("sub/biome.jsonc", "{ \"root\": false, \"files\": { \"includes\": [\"*.js\"] } }\n")
+      .withNewFile("sub/a.js", "export const a = 1;\n")
+      .withNewFile("sub/b.ts", "debugger;\n")
+      .withNewFile("ext/biome.json", "{ \"root\": false, \"extends\": \"//\" }\n")
+      .withNewFile("ext/y.js", "export const y = 1;\n")
+      .withNewFile("ext/x.gen.ts", "debugger;\n")
+  }
+
+  let discoveredFiles: [String!]! = [
+    "Upper.JS",
+    "biome.json",
+    "data.json",
+    "ext/biome.json",
+    "ext/y.js",
+    "index.ts",
+    "package.json",
+    "sub/a.js",
+  ]
+
+  let biomeManifest(version: String!): String! {
+    "{ \"private\": true, \"devDependencies\": { \"@biomejs/biome\": \"" + version + "\" } }\n"
+  }
+
+  """
+  Files are those Biome checks, found from the source and the configurations
+  without running Biome.
+  """
+  filesCheck: Void @check {
+    let fx = discoveryFixture.asWorkspace
+    let files = projectFiles(fx, ".")
+    assert(files == discoveredFiles, "discovered files: " + files.join(", "))
+
+    # Biome 2.6 checks Markdown and YAML too. Its version comes from an exact
+    # package.json version or the lockfile; a range alone leaves it unknown,
+    # and then only the types every Biome 2 handles are files.
+    let typed = discoveryFixture.withNewFile("config.yaml", "a: 1\n")
+    let newer = typed.withNewFile("package.json", biomeManifest("2.6.6")).asWorkspace
+    let newerFiles = projectFiles(newer, ".")
+    assert(
+      newerFiles.contains("notes.md") and newerFiles.contains("config.yaml"),
+      "files for Biome 2.6: " + newerFiles.join(", "),
+    )
+    let ranged = typed.withNewFile("package.json", biomeManifest("^2.5.0")).asWorkspace
+    let rangedFiles = projectFiles(ranged, ".")
+    assert(
+      rangedFiles.contains("notes.md") == false and rangedFiles.contains("index.ts"),
+      "files for an unknown Biome: " + rangedFiles.join(", "),
+    )
+    let locked = typed
+      .withNewFile("package.json", biomeManifest("^2.5.0"))
+      .withNewFile("pnpm-lock.yaml", "lockfileVersion: '9.0'\npackages:\n  '@biomejs/biome@2.6.6':\n    resolution: {integrity: sha512-x}\n")
+      .asWorkspace
+    let lockedFiles = projectFiles(locked, ".")
+    assert(lockedFiles.contains("config.yaml"), "files for a locked Biome 2.6: " + lockedFiles.join(", "))
     null
   }
 
   """
   get and list build the projects at their keys; subset keeps parent order,
   rejects unknown and duplicate keys, and narrows what get accepts and what
-  the batch runs.
+  the collection's lint runs. The same holds for a project's files.
   """
   collectionCheck: Void @check {
     let fx = fixture
@@ -159,29 +257,67 @@ type E2e {
     assert(duplicate == "rejected", "subset accepted a duplicate key")
 
     # The failing projects are in the collection but outside the subset.
-    run(projects.subset(keys: ["clean"]).batch.lint(fx))
-    run(projects.subset(keys: []).batch.lint(fx))
+    projects.subset(keys: ["clean"]).lint(fx)
+    projects.subset(keys: []).lint(fx)
+
+    # The same for files: the failing files are outside the subset.
+    let files = projects.get(key: "failing").files(fx)
+    assert(files.get(key: "failing/index.js").path == "failing/index.js", "get did not return the file at its key")
+    files.subset(keys: ["failing/biome.json"]).lint(fx)
+    files.subset(keys: []).lint(fx)
+    let narrowed = { files.subset(keys: ["failing/biome.json", "failing/debug.js"]).lint(fx); "unexpected success" } rescue {
+      err: Error => err.message
+    }
+    assert(
+      narrowed.contains("Biome failed in 1 of 2 file(s)") and narrowed.contains("- failing/debug.js: biome check failed (exit 1)"),
+      "lint of a file subset did not name its failing file: " + narrowed,
+    )
     null
   }
 
   """
   A clean project passes on its own, below a workspace-root install: Biome
   runs in the project, not in /src/src, and leaves the nested root project,
-  which fails on its own, alone. The batch names exactly the failing projects
-  and the step that failed.
+  which fails on its own, alone. The projects' lint names exactly the
+  failing projects and their failing files.
+
+  A file's check, called directly with its project's files, reports only its
+  own file.
   """
   lintCheck: Void @check {
     let fx = fixture
     let projects = biomejs.projects(fx)
-    run(projects.get(key: "clean").lint(fx))
+    projects.get(key: "clean").lint(fx)
 
-    let nested = failure(projects.get(key: "clean/nested").lint(fx))
-    assert(nested.contains("biome check failed (exit 1)"), "the nested root project passed: " + nested)
+    let nested = { projects.get(key: "clean/nested").lint(fx); "unexpected success" } rescue {
+      err: Error => err.message
+    }
+    assert(
+      nested.contains("- clean/nested/index.js: biome check failed (exit 1)"),
+      "the nested root project passed: " + nested,
+    )
 
-    let batch = failure(projects.batch.lint(fx))
-    assert(batch.contains("- failing: biome check failed (exit 1)"), "the batch did not name failing: " + batch)
-    assert(batch.contains("- clean/nested: biome check failed"), "the batch did not name clean/nested: " + batch)
-    assert(batch.contains("- clean:") == false, "the batch blamed the clean project: " + batch)
+    let all = { projects.lint(fx); "unexpected success" } rescue {
+      err: Error => err.message
+    }
+    assert(all.contains("Biome failed in 2 project(s)"), "the projects' lint did not count the failing projects: " + all)
+    assert(all.contains("- failing: Biome failed in 3 of 4 file(s)"), "the projects' lint did not name failing: " + all)
+    assert(all.contains("failing/debug.js") and all.contains("noDebugger"), "the projects' lint did not name the failing file: " + all)
+    assert(all.contains("- clean/nested: Biome failed"), "the projects' lint did not name clean/nested: " + all)
+    assert(all.contains("- clean:") == false, "the projects' lint blamed the clean project: " + all)
+
+    let files = projects.get(key: "failing").files(fx)
+    let debug = failure(files.get(key: "failing/debug.js").lint(fx, selection: files))
+    assert(
+      debug.contains("failing/debug.js: biome check failed (exit 1)") and debug.contains("noDebugger"),
+      "the failing file's check: " + debug,
+    )
+    assert(debug.contains("data.json") == false, "the file's check reported another file: " + debug)
+    run(files.get(key: "failing/biome.json").lint(fx, selection: files))
+    let outside = failure(
+      files.get(key: "failing/debug.js").lint(fx, selection: files.subset(keys: ["failing/biome.json"])),
+    )
+    assert(outside.contains("outside the lint selection"), "a file outside its selection was linted: " + outside)
     null
   }
 
@@ -235,24 +371,31 @@ type E2e {
   """
   installCheck: Void @check {
     let pnpm = pnpmFixture
-    run(biomejs.projects(pnpm).batch.lint(pnpm))
+    biomejs.projects(pnpm).lint(pnpm)
 
     # Without a lockfile, pnpm refuses a frozen install.
     let frozen = biomejs(installFlags: ["--frozen-lockfile"]).projects(pnpm)
-    let one = failure(frozen.get(key: "packages/a").lint(pnpm))
+    let one = { frozen.get(key: "packages/a").lint(pnpm); "unexpected success" } rescue {
+      err: Error => err.message
+    }
     assert(
       one.contains("install failed (pnpm install --frozen-lockfile"),
       "the install flags did not reach pnpm: " + one,
     )
-    let batch = failure(frozen.batch.lint(pnpm))
+    let all = { frozen.lint(pnpm); "unexpected success" } rescue {
+      err: Error => err.message
+    }
     assert(
-      batch.contains("- .: install failed") and batch.contains("- packages/a: install failed"),
-      "the batch did not name each project's failed install: " + batch,
+      all.contains("- .: install failed") and all.contains("- packages/a: install failed"),
+      "the projects' lint did not name each project's failed install: " + all,
     )
 
-    let npm = failure(
-      biomejs(packageManager: "npm").projects(pnpm).get(key: "packages/a").lint(pnpm),
-    )
+    let npm = {
+      biomejs(packageManager: "npm").projects(pnpm).get(key: "packages/a").lint(pnpm)
+      "unexpected success"
+    } rescue {
+      err: Error => err.message
+    }
     assert(npm.contains("install failed (npm install, exit"), "an explicit npm was not used: " + npm)
     null
   }
@@ -280,7 +423,7 @@ type E2e {
       .withNewFile("app/index.js", "debugger;\n")
       .asWorkspace
     assert(biomejs.projects(fx).keys == ["app"], "file: dependency projects: " + biomejs.projects(fx).keys.join(", "))
-    run(biomejs.projects(fx).get(key: "app").lint(fx))
+    biomejs.projects(fx).get(key: "app").lint(fx)
     null
   }
 
@@ -294,9 +437,9 @@ type E2e {
       .withNewFile("biome.json", "{}\n")
       .withNewFile("index.js", "export const x = 1;\n")
       .asWorkspace
-    let notInstalled = failure(
-      biomejs.projects(missing).get(key: ".").lint(missing),
-    )
+    let notInstalled = { biomejs.projects(missing).get(key: ".").lint(missing); "unexpected success" } rescue {
+      err: Error => err.message
+    }
     assert(
       notInstalled.contains("biome is not installed: add @biomejs/biome to the devDependencies of package.json"),
       "a project without Biome did not fail clearly: " + notInstalled,
@@ -306,7 +449,7 @@ type E2e {
       .withNewFile("biome.json", "{}\n")
       .withNewFile("index.js", "export const x = 1;\n")
       .asWorkspace
-    run(biomejs.projects(standalone).get(key: ".").lint(standalone))
+    biomejs.projects(standalone).get(key: ".").lint(standalone)
 
     # npx must run Biome, not find the module's own wrapper and recurse: an
     # unformatted file fails with Biome's report.
@@ -314,13 +457,294 @@ type E2e {
       .withNewFile("biome.json", "{}\n")
       .withNewFile("index.js", "const  x=1;\nexport { x };\n")
       .asWorkspace
-    let report = failure(
-      biomejs.projects(unformatted).get(key: ".").lint(unformatted),
-    )
+    let report = { biomejs.projects(unformatted).get(key: ".").lint(unformatted); "unexpected success" } rescue {
+      err: Error => err.message
+    }
     assert(
       report.contains("biome check failed (exit 1)") and report.contains("index.js format"),
       "the npx fallback did not lint: " + report,
     )
     null
+  }
+
+  # Only the unindented CHECKS header counts.
+  let checkSummaryMatches(output: String!, passed: Int!, failed: Int!): Boolean! {
+    let headers = output.split("\n").filter { line =>
+      line.hasPrefix("CHECKS ") or line.hasPrefix("== CHECKS ==")
+    }
+    let expected = (if (failed > 0) { ["✘", `${failed}`, "failed"] } else { [] })
+      + (if (passed > 0) { ["✔", `${passed}`, "passed"] } else { [] })
+    headers.length == 1 and headers[0]!.trimPrefix("== ").trimPrefix("CHECKS").trimPrefix(" ==")
+      .trimSpace.split(" ").filter { word => word != "" } == expected
+  }
+
+  """
+  checkSummaryMatches reads the totals of `dagger check`.
+  """
+  selectedSummaryCheck: Void @check {
+    assert(checkSummaryMatches("== CHECKS ==  ✘ 1 failed  ✔ 4 passed\n", 4, 1), "mixed counts were not recognized")
+    assert(checkSummaryMatches("== CHECKS ==  ✔ 3 passed\n", 3, 0), "passing counts were not recognized")
+    assert(checkSummaryMatches("== CHECKS ==  ✔ 13 passed\n", 3, 0) == false, "accepted a wrong count")
+    assert(checkSummaryMatches("  CHECKS  ✔ 3 passed\n", 3, 0) == false, "accepted a nested header")
+    null
+  }
+
+  """
+  Run `dagger check` on a fixture through the engine's CLI, in its own
+  session: direct calls do not apply the engine's filtered collection view.
+  """
+  let daggerRun(ws: Workspace!, fixture: Directory!, args: [String!]!, settings: String! = ""): Container! {
+    container
+      .from("alpine:3.23")
+      .withEnvVariable("NO_COLOR", "1")
+      .withDirectory("/source", ws.directory("/"))
+      .withDirectory("/work", fixture)
+      .withNewFile("/work/.git/HEAD", "ref: refs/heads/main\n")
+      .withNewFile("/work/dagger.toml", "[modules.biomejs]\nsource = \"/source\"\n" + settings)
+      .withWorkdir("/work")
+      .withExec(["/dev/.dagger/dagger"] + args, expect: ANY, daggerInDaggerNewSession: true)
+  }
+
+  let selectedCheck(
+    ws: Workspace!,
+    fixture: Directory!,
+    args: [String!]!,
+    passed: Int!,
+    failed: Int! = 0,
+    messages: [String!]! = [],
+    settings: String! = "",
+  ): Void {
+    let result = daggerRun(ws, fixture, ["--progress=report", "check", "--generated=false"] + args, settings)
+    let output = result.stdout + result.stderr
+    assert((result.exitCode == 0) == (failed == 0), "unexpected check exit status:\n" + output)
+    assert(checkSummaryMatches(output, passed, failed), "unexpected Dagger check totals:\n" + output)
+    messages.map { message =>
+      assert(output.contains(message), "missing " + message + ":\n" + output)
+    }
+    null
+  }
+
+  """
+  Two projects, a and b, below one install root, each with two clean files
+  and a failing one.
+  """
+  let selectionFixture: Directory! {
+    ["a", "b"].reduce(
+      directory.withNewFile(
+        "package.json",
+        "{ \"private\": true, \"devDependencies\": { \"@biomejs/biome\": \"" + biomeVersion + "\" } }\n",
+      ),
+    ) { fixture, project =>
+      fixture
+        .withNewFile(project + "/biome.json", "{}\n")
+        .withNewFile(project + "/one.js", "export const one = 1;\n")
+        .withNewFile(project + "/two.js", "export const two = 2;\n")
+        .withNewFile(project + "/bad.js", "debugger;\n")
+    }
+  }
+
+  let fileArgs(files: [String!]!): [String!]! {
+    files.map { file => "--biomejs-biome-file=" + file }
+  }
+
+  """
+  Files selected in two projects pass, and the failing files left out are
+  not checked: the shared command names only the selected files.
+  """
+  selectedFilesCheck(ws: Workspace!): Void @check {
+    selectedCheck(ws, selectionFixture, fileArgs(["a/one.js", "a/two.js", "b/one.js"]), passed: 3)
+  }
+
+  """
+  A failing file fails only its own check.
+  """
+  selectedFailureCheck(ws: Workspace!): Void @check {
+    selectedCheck(
+      ws,
+      selectionFixture,
+      fileArgs(["a/one.js", "a/bad.js", "b/one.js", "b/two.js"]),
+      passed: 3,
+      failed: 1,
+      messages: ["a/bad.js: biome check failed (exit 1)", "lint/suspicious/noDebugger"],
+    )
+  }
+
+  """
+  A project selected whole runs `biome check` on it, with a check per file.
+  """
+  selectedProjectCheck(ws: Workspace!): Void @check {
+    selectedCheck(
+      ws,
+      selectionFixture,
+      ["--biomejs-biome-project=b"],
+      passed: 3,
+      failed: 1,
+      messages: ["b/bad.js: biome check failed (exit 1)"],
+    )
+  }
+
+  """
+  A setup failure, here a project that does not install Biome, fails every
+  selected file of each project.
+  """
+  selectedSetupFailureCheck(ws: Workspace!): Void @check {
+    selectedCheck(
+      ws,
+      selectionFixture.withNewFile("package.json", "{ \"private\": true }\n"),
+      fileArgs(["a/one.js", "b/one.js"]),
+      passed: 0,
+      failed: 2,
+      messages: ["biome is not installed: add @biomejs/biome to the devDependencies of package.json"],
+    )
+  }
+
+  """
+  A project whose Biome reads another configuration than discovery does,
+  alt.json through BIOME_CONFIG_PATH.
+  """
+  let configPathFixture(alt: String!): Directory! {
+    directory
+      .withNewFile(
+        "package.json",
+        "{ \"private\": true, \"devDependencies\": { \"@biomejs/biome\": \"" + biomeVersion + "\" } }\n",
+      )
+      .withNewFile("a/biome.json", "{ \"files\": { \"includes\": [\"**\", \"!extra.js\"] } }\n")
+      .withNewFile("a/alt.json", alt)
+      .withNewFile("a/one.js", "export const one = 1;\n")
+      .withNewFile("a/two.js", "export const two = 2;\n")
+      .withNewFile("a/extra.js", "debugger;\n")
+  }
+
+  let configPathSettings: String! = "[modules.biomejs.settings]\nenvironment = [\"BIOME_CONFIG_PATH=alt.json\"]\n"
+
+  """
+  Biome checks a failing file that has no check, which discovery left out:
+  every check that shares the command fails.
+  """
+  selectedUncheckedFailureCheck(ws: Workspace!): Void @check {
+    selectedCheck(
+      ws,
+      configPathFixture("{}\n"),
+      ["--biomejs-biome-project=a"],
+      passed: 0,
+      failed: 4,
+      messages: ["biome check failed in files without a lint check: extra.js"],
+      settings: configPathSettings,
+    )
+  }
+
+  """
+  Biome leaves out a selected file: its check fails as not checked rather
+  than passing with nothing behind it.
+  """
+  selectedNotRunCheck(ws: Workspace!): Void @check {
+    selectedCheck(
+      ws,
+      configPathFixture("{ \"files\": { \"includes\": [\"**\", \"!two.js\"] } }\n"),
+      fileArgs(["a/one.js", "a/two.js"]),
+      passed: 1,
+      failed: 1,
+      messages: ["a/two.js: biome check did not process this file"],
+      settings: configPathSettings,
+    )
+  }
+
+  """
+  Every discovered file of the discovery fixture is one Biome checks: the
+  project passes whole, with no file left unchecked and none checked without
+  a check of its own.
+  """
+  selectedDiscoveryCheck(ws: Workspace!): Void @check {
+    selectedCheck(ws, discoveryFixture, ["--biomejs"], passed: discoveredFiles.length)
+  }
+
+  """
+  Two projects without failing files, for the checks below.
+  """
+  let cleanFixture: Directory! {
+    selectionFixture.withoutFile("a/bad.js").withoutFile("b/bad.js")
+  }
+
+  """
+  Every selected file of a project shares one biome check: six checks in two
+  projects run two. A narrowed project names its selected files, sorted; a
+  project with all its files selected runs whole.
+  """
+  selectedSharedRunCheck(ws: Workspace!): Void @check {
+    # Unique content, so that no other check has cached these runs.
+    let fixture = cleanFixture.withNewFile("a/marker.js", "export const sharedRunCheck = 1;\n")
+    let args = fileArgs(["a/two.js", "a/marker.js", "a/one.js", "b/biome.json", "b/one.js", "b/two.js"])
+    let result = daggerRun(ws, fixture, ["-vvv", "--progress=plain", "check", "--generated=false"] + args)
+    let output = result.stdout + result.stderr
+    assert(result.exitCode == 0, "the selected checks failed:\n" + output)
+    let runs = output.split("\n").filter { line =>
+      line.contains("withExec /opt/dagger-biomejs/biome check") and line.contains("redirectStdout")
+    }
+    assert(runs.length == 2, "expected one biome check per project, got:\n" + runs.join("\n"))
+    assert(
+      runs.any { line => line.contains("--files-ignore-unknown=true marker.js one.js two.js (") },
+      "the narrowed project did not name its selected files:\n" + runs.join("\n"),
+    )
+    assert(
+      runs.any { line => line.contains("--files-ignore-unknown=true (") },
+      "the project with every file selected did not run whole:\n" + runs.join("\n"),
+    )
+    let indexers = output.split("\n").filter { line => line.contains("withExec node /biome-report/index.mjs") }
+    assert(indexers.length == 2, "expected one indexer per project, got:\n" + indexers.join("\n"))
+    null
+  }
+
+  """
+  Listing runs neither Biome nor an install, nor any container from the base
+  image: with an image that does not exist and a dependency that cannot
+  install, every file is still listed.
+  """
+  listingCheck(ws: Workspace!): Void @check {
+    let fixture = cleanFixture.withNewFile(
+      "package.json",
+      "{ \"private\": true, \"devDependencies\": { \"@biomejs/biome\": \"" + biomeVersion + "\", \"no-such-package-dagger-biomejs\": \"0.0.0\" } }\n",
+    )
+    let settings = "[modules.biomejs.settings]\nbaseImageAddress = \"registry.invalid/no-such-image:0\"\n"
+    let result = daggerRun(ws, fixture, ["-vvv", "--progress=plain", "check", "-l", "--all"], settings)
+    let output = result.stdout + result.stderr
+    assert(result.exitCode == 0, "listing failed:\n" + output)
+    ["a/biome.json", "a/one.js", "a/two.js", "b/biome.json", "b/one.js", "b/two.js"].map { file =>
+      assert(output.contains(file), "listing missed " + file + ":\n" + output)
+    }
+    ["/opt/dagger-biomejs/biome", "npm install", "Container.from(address: \"registry.invalid", "/biome-report/"].map { trace =>
+      assert(output.contains(trace) == false, "listing ran " + trace + ":\n" + output)
+    }
+    null
+  }
+
+  """
+  A project whose configuration does not parse fails alone, naming the
+  file; the other project passes.
+  """
+  selectedBrokenConfigCheck(ws: Workspace!): Void @check {
+    selectedCheck(
+      ws,
+      cleanFixture.withNewFile("a/biome.json", "{ \"files\": \n"),
+      ["--biomejs"],
+      passed: 3,
+      failed: 3,
+      messages: ["a/biome.json: biome check failed (exit 1)", "biome.json:"],
+    )
+  }
+
+  """
+  The indexer runs in its own pinned image, so a Debian base works as an
+  Alpine one does.
+  """
+  selectedDebianBaseCheck(ws: Workspace!): Void @check {
+    selectedCheck(
+      ws,
+      selectionFixture,
+      fileArgs(["a/one.js", "a/bad.js", "b/one.js"]),
+      passed: 2,
+      failed: 1,
+      messages: ["a/bad.js: biome check failed (exit 1)"],
+      settings: "[modules.biomejs.settings]\nbaseImageAddress = \"node:24-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20\"\n",
+    )
   }
 }

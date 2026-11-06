@@ -10,7 +10,8 @@ import {
   Workspace
 } from "@dagger.io/dagger"
 import type {
-  ID
+  ID,
+  Void
 } from "@dagger.io/dagger"
 
 
@@ -18,40 +19,40 @@ export type BiomejsBiomeProjectFixOpts = {
   /**
    * Files to fix, relative to the project root.
    */
-  files?: string[] // biomejs (../src/index.ts:507:3)
+  files?: string[] // biomejs (../src/index.ts:1221:3)
 
   /**
    * Patterns, relative to the project root, of files to include in the changeset. Empty includes every file Biome fixed.
    */
-  fixFilter?: string[] // biomejs (../src/index.ts:508:3)
+  fixFilter?: string[] // biomejs (../src/index.ts:1222:3)
 }
 
 export type ClientBiomejsOpts = {
   /**
    * Base image for Biome containers. It must provide Node.js and npm.
    */
-  baseImageAddress: string // biomejs (../src/index.ts:897:3)
+  baseImageAddress: string // biomejs (../src/index.ts:1625:3)
 
   /**
    * Package manager that installs dependencies: npm, yarn, pnpm or bun.
    * Empty detects it from package.json's packageManager field, else the
    * lockfile, else npm.
    */
-  packageManager: string // biomejs (../src/index.ts:903:3)
+  packageManager: string // biomejs (../src/index.ts:1631:3)
 
   /**
    * Extra arguments for the install command, e.g. ["--ignore-scripts"].
    */
-  installFlags?: string[] // biomejs (../src/index.ts:907:3)
+  installFlags?: string[] // biomejs (../src/index.ts:1635:3)
 
   /**
    * Environment variables for Biome, as KEY=VALUE.
    */
-  environment?: string[] // biomejs (../src/index.ts:911:3)
+  environment?: string[] // biomejs (../src/index.ts:1639:3)
 }
 
 
-export class Biomejs extends BaseClient { // biomejs (../src/index.ts:884:14)
+export class Biomejs extends BaseClient { // biomejs (../src/index.ts:1612:14)
   private readonly _id?: ID | undefined = undefined
 
   /**
@@ -87,7 +88,7 @@ export class Biomejs extends BaseClient { // biomejs (../src/index.ts:884:14)
   /**
    * Biome projects at or below the working directory, keyed by project root.
    */
-  projects = (ws: Workspace): BiomejsBiomeProjects => { // biomejs (../src/index.ts:923:8)
+  projects = (ws: Workspace): BiomejsBiomeProjects => { // biomejs (../src/index.ts:1651:8)
 
     const ctx = this._ctx.select(
       "projects",
@@ -98,10 +99,9 @@ export class Biomejs extends BaseClient { // biomejs (../src/index.ts:884:14)
 }
 
 /**
- * A Biome project, rooted at a workspace-relative directory holding a root
- * Biome configuration.
+ * A file Biome checks, keyed by its workspace path.
  */
-export class BiomejsBiomeProject extends BaseClient { // biomejs (../src/index.ts:450:14)
+export class BiomejsBiomeFile extends BaseClient { // biomejs (../src/index.ts:911:14)
   private readonly _id?: ID | undefined = undefined
   private readonly _path?: string | undefined = undefined
 
@@ -116,6 +116,208 @@ export class BiomejsBiomeProject extends BaseClient { // biomejs (../src/index.t
      super(ctx)
 
      this._id = _id
+     this._path = _path
+   }
+
+  /**
+   * A unique identifier for this BiomejsBiomeFile.
+   */
+  id = async (): Promise<ID> => {
+    if (this._id) {
+      return this._id
+    }
+
+    const ctx = this._ctx.select(
+      "id",
+    )
+
+    const response: Awaited<ID> = await ctx.execute()
+
+    
+    return response
+  }
+
+  /**
+   * Lint this file (`biome check`).
+   * 
+   * Every selected file of a project shares one biome check of the project,
+   * which the engine runs once; each check reports only its own file.
+   * @param selection The files selected in this file's project. `dagger check` passes it, filtered by the active selection.
+   */
+  lint = (ws: Workspace, selection: BiomejsBiomeFiles): Check => { // biomejs (../src/index.ts:932:8)
+
+    const ctx = this._ctx.select(
+      "lint",
+      { ws, selection },
+    )
+    return new Check(ctx)
+  }
+
+  /**
+   * File path, relative to the workspace.
+   */
+  path = async (): Promise<string> => { // biomejs (../src/index.ts:916:2)
+    if (this._path) {
+      return this._path
+    }
+
+    const ctx = this._ctx.select(
+      "path",
+    )
+
+    const response: Awaited<string> = await ctx.execute()
+
+    
+    return response
+  }
+}
+
+/**
+ * The files Biome checks in one project, keyed by workspace path.
+ */
+export class BiomejsBiomeFiles extends BaseClient { // biomejs (../src/index.ts:942:14)
+  private readonly _id?: ID | undefined = undefined
+  private readonly _lint?: Void | undefined = undefined
+
+  /**
+   * Constructor is used for internal usage only, do not create object from it.
+   */
+   constructor(
+    ctx?: Context,
+     _id?: ID,
+     _lint?: Void,
+   ) {
+     super(ctx)
+
+     this._id = _id
+     this._lint = _lint
+   }
+
+  /**
+   * A unique identifier for this BiomejsBiomeFiles.
+   */
+  id = async (): Promise<ID> => {
+    if (this._id) {
+      return this._id
+    }
+
+    const ctx = this._ctx.select(
+      "id",
+    )
+
+    const response: Awaited<ID> = await ctx.execute()
+
+    
+    return response
+  }
+
+  /**
+   * The file at path.
+   */
+  get = (key: string): BiomejsBiomeFile => { // biomejs (../src/index.ts:996:2)
+
+    const ctx = this._ctx.select(
+      "get",
+      { key },
+    )
+    return new BiomejsBiomeFile(ctx)
+  }
+
+  /**
+   * Current keys, in author order.
+   */
+  keys = async (): Promise<string[]> => {
+    const ctx = this._ctx.select(
+      "keys",
+    )
+
+    const response: Awaited<string[]> = await ctx.execute()
+
+    
+    return response
+  }
+
+  /**
+   * Lint the selected files with one biome check, failing if any fails. Not
+   * a check: `dagger check` lints each file, sharing this same run.
+   */
+  lint = async (ws: Workspace): Promise<void> => { // biomejs (../src/index.ts:1005:8)
+    if (this._lint) {
+      return
+    }
+
+    const ctx = this._ctx.select(
+      "lint",
+      { ws},
+    )
+
+    await ctx.execute()
+
+    
+  }
+
+  /**
+   * Items in the same order as keys.
+   */
+  list = async (): Promise<BiomejsBiomeFile[]> => {
+    type list = {
+      id: ID
+    }
+
+    const ctx = this._ctx.select(
+      "list",
+    ).select("id")
+
+    const response: Awaited<list[]> = await ctx.execute()
+
+    
+    return response.map((r) => new BiomejsBiomeFile(ctx.copy().selectNode(r.id, "BiomejsBiomeFile")))
+  }
+
+  /**
+   * Select keys from this collection. Preserve author order.
+   */
+  subset = (keys: string[]): BiomejsBiomeFiles => {
+
+    const ctx = this._ctx.select(
+      "subset",
+      { keys },
+    )
+    return new BiomejsBiomeFiles(ctx)
+  }
+
+  /**
+   * Call the provided function with current BiomejsBiomeFiles.
+   *
+   * This is useful for reusability and readability by not breaking the calling chain.
+   */
+  with = (arg: (param: BiomejsBiomeFiles) => BiomejsBiomeFiles) => {
+    return arg(this)
+  }
+}
+
+/**
+ * A Biome project, rooted at a workspace-relative directory holding a root
+ * Biome configuration.
+ */
+export class BiomejsBiomeProject extends BaseClient { // biomejs (../src/index.ts:1110:14)
+  private readonly _id?: ID | undefined = undefined
+  private readonly _lint?: Void | undefined = undefined
+  private readonly _path?: string | undefined = undefined
+
+  /**
+   * Constructor is used for internal usage only, do not create object from it.
+   */
+   constructor(
+    ctx?: Context,
+     _id?: ID,
+     _lint?: Void,
+     _path?: string,
+   ) {
+     super(ctx)
+
+     this._id = _id
+     this._lint = _lint
      this._path = _path
    }
 
@@ -138,6 +340,23 @@ export class BiomejsBiomeProject extends BaseClient { // biomejs (../src/index.t
   }
 
   /**
+   * Files Biome checks in this project, keyed by workspace path.
+   * 
+   * They are the files of the types Biome handles that its configuration
+   * includes, read from the source without running Biome: everything but
+   * node_modules, files ignored by .gitignore, nested root projects, and
+   * files another tool owns, such as package-lock.json.
+   */
+  files = (ws: Workspace): BiomejsBiomeFiles => { // biomejs (../src/index.ts:1148:8)
+
+    const ctx = this._ctx.select(
+      "files",
+      { ws },
+    )
+    return new BiomejsBiomeFiles(ctx)
+  }
+
+  /**
    * Apply Biome's safe fixes to this project and return the changes.
    * 
    * The changes are rooted at the caller's working directory, where the CLI
@@ -147,8 +366,8 @@ export class BiomejsBiomeProject extends BaseClient { // biomejs (../src/index.t
    * @param opts.files Files to fix, relative to the project root.
    * @param opts.fixFilter Patterns, relative to the project root, of files to include in the changeset. Empty includes every file Biome fixed.
    */
-  fix = (ws: Workspace, opts?: BiomejsBiomeProjectFixOpts // biomejs (../src/index.ts:505:8) 
-		): Changeset => { // biomejs (../src/index.ts:505:8)
+  fix = (ws: Workspace, opts?: BiomejsBiomeProjectFixOpts // biomejs (../src/index.ts:1219:8) 
+		): Changeset => { // biomejs (../src/index.ts:1219:8)
 
     const ctx = this._ctx.select(
       "fix",
@@ -158,21 +377,28 @@ export class BiomejsBiomeProject extends BaseClient { // biomejs (../src/index.t
   }
 
   /**
-   * Lint this project.
+   * Lint the whole project with one biome check, failing if any file fails.
+   * Not a check: `dagger check` lints each file, sharing this same run.
    */
-  lint = (ws: Workspace): Check => { // biomejs (../src/index.ts:484:8)
+  lint = async (ws: Workspace): Promise<void> => { // biomejs (../src/index.ts:1202:8)
+    if (this._lint) {
+      return
+    }
 
     const ctx = this._ctx.select(
       "lint",
-      { ws },
+      { ws},
     )
-    return new Check(ctx)
+
+    await ctx.execute()
+
+    
   }
 
   /**
    * Project root, relative to the workspace.
    */
-  path = async (): Promise<string> => { // biomejs (../src/index.ts:455:2)
+  path = async (): Promise<string> => { // biomejs (../src/index.ts:1115:2)
     if (this._path) {
       return this._path
     }
@@ -192,8 +418,9 @@ export class BiomejsBiomeProject extends BaseClient { // biomejs (../src/index.t
  * Biome projects in a workspace, keyed by the directory of their root Biome
  * configuration.
  */
-export class BiomejsBiomeProjects extends BaseClient { // biomejs (../src/index.ts:818:14)
+export class BiomejsBiomeProjects extends BaseClient { // biomejs (../src/index.ts:1546:14)
   private readonly _id?: ID | undefined = undefined
+  private readonly _lint?: Void | undefined = undefined
 
   /**
    * Constructor is used for internal usage only, do not create object from it.
@@ -201,10 +428,12 @@ export class BiomejsBiomeProjects extends BaseClient { // biomejs (../src/index.
    constructor(
     ctx?: Context,
      _id?: ID,
+     _lint?: Void,
    ) {
      super(ctx)
 
      this._id = _id
+     this._lint = _lint
    }
 
   /**
@@ -226,20 +455,9 @@ export class BiomejsBiomeProjects extends BaseClient { // biomejs (../src/index.
   }
 
   /**
-   * Operations on the current collection.
-   */
-  batch = (): BiomejsBiomeProjects_Batch => {
-
-    const ctx = this._ctx.select(
-      "batch",
-    )
-    return new BiomejsBiomeProjects_Batch(ctx)
-  }
-
-  /**
    * The Biome project rooted at path.
    */
-  get = (key: string): BiomejsBiomeProject => { // biomejs (../src/index.ts:851:2)
+  get = (key: string): BiomejsBiomeProject => { // biomejs (../src/index.ts:1579:2)
 
     const ctx = this._ctx.select(
       "get",
@@ -260,6 +478,25 @@ export class BiomejsBiomeProjects extends BaseClient { // biomejs (../src/index.
 
     
     return response
+  }
+
+  /**
+   * Lint the selected Biome projects, each with one biome check. Not a
+   * check: `dagger check` lints each file of each project.
+   */
+  lint = async (ws: Workspace): Promise<void> => { // biomejs (../src/index.ts:1594:8)
+    if (this._lint) {
+      return
+    }
+
+    const ctx = this._ctx.select(
+      "lint",
+      { ws},
+    )
+
+    await ctx.execute()
+
+    
   }
 
   /**
@@ -299,56 +536,6 @@ export class BiomejsBiomeProjects extends BaseClient { // biomejs (../src/index.
    */
   with = (arg: (param: BiomejsBiomeProjects) => BiomejsBiomeProjects) => {
     return arg(this)
-  }
-}
-
-/**
- * Biome projects in a workspace, keyed by the directory of their root Biome
- * configuration.
- */
-export class BiomejsBiomeProjects_Batch extends BaseClient { // biomejs (../src/index.ts:818:14)
-  private readonly _id?: ID | undefined = undefined
-
-  /**
-   * Constructor is used for internal usage only, do not create object from it.
-   */
-   constructor(
-    ctx?: Context,
-     _id?: ID,
-   ) {
-     super(ctx)
-
-     this._id = _id
-   }
-
-  /**
-   * A unique identifier for this BiomejsBiomeProjects_Batch.
-   */
-  id = async (): Promise<ID> => {
-    if (this._id) {
-      return this._id
-    }
-
-    const ctx = this._ctx.select(
-      "id",
-    )
-
-    const response: Awaited<ID> = await ctx.execute()
-
-    
-    return response
-  }
-
-  /**
-   * Lint the selected Biome projects.
-   */
-  lint = (ws: Workspace): Check => { // biomejs (../src/index.ts:866:8)
-
-    const ctx = this._ctx.select(
-      "lint",
-      { ws },
-    )
-    return new Check(ctx)
   }
 }
 
